@@ -7,6 +7,7 @@ import { AbsoluteTruthDisplay } from "@/components/AbsoluteTruthDisplay";
 import { LedgerTable } from "@/components/LedgerTable";
 import { UploadButton } from "@/components/UploadButton";
 import { SyncButton } from "@/components/SyncButton";
+import { LivePulse } from "@/components/LivePulse";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
 import { useLedger, useAbsoluteTruth, LedgerCategory } from "@/hooks/useLedger";
@@ -62,13 +63,17 @@ export default function Index() {
       {/* Header - Compact on mobile */}
       <header className="border-b bg-card sticky top-0 z-40">
         <div className="container mx-auto flex items-center justify-between px-4 py-3 md:py-4">
-          <div>
-            <h1 className="text-lg md:text-xl font-bold">Financial OS</h1>
-            {!isMobile && (
-              <p className="text-sm text-muted-foreground">
-                Verification Dashboard
-              </p>
-            )}
+          <div className="flex items-center gap-3">
+            <div>
+              <h1 className="text-lg md:text-xl font-bold">Financial OS</h1>
+              {!isMobile && (
+                <p className="text-sm text-muted-foreground">
+                  Verification Dashboard
+                </p>
+              )}
+            </div>
+            {/* Live Pulse Indicator */}
+            <LivePulse />
           </div>
           <div className="flex items-center gap-2 md:gap-3">
             {/* Sync Button */}
