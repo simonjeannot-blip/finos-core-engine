@@ -1,12 +1,13 @@
 import { useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { LogOut } from "lucide-react";
+import { LogOut, Shield } from "lucide-react";
 import { CategoryCard } from "@/components/CategoryCard";
 import { AbsoluteTruthDisplay } from "@/components/AbsoluteTruthDisplay";
 import { LedgerTable } from "@/components/LedgerTable";
 import { UploadButton } from "@/components/UploadButton";
 import { useAuth } from "@/hooks/useAuth";
+import { useProfile } from "@/hooks/useProfile";
 import { useLedger, useAbsoluteTruth, LedgerCategory } from "@/hooks/useLedger";
 
 const CATEGORIES: LedgerCategory[] = ["R", "P", "O", "V", "D", "A"];
@@ -14,6 +15,7 @@ const CATEGORIES: LedgerCategory[] = ["R", "P", "O", "V", "D", "A"];
 export default function Index() {
   const navigate = useNavigate();
   const { user, loading: authLoading, signOut } = useAuth();
+  const { isSuperAdmin } = useProfile();
   const { data: ledgerEntries, isLoading: ledgerLoading, refetch: refetchLedger } = useLedger();
   const { data: totals, refetch: refetchTotals } = useAbsoluteTruth();
 
@@ -63,6 +65,14 @@ export default function Index() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {isSuperAdmin && (
+              <Link to="/admin">
+                <Button variant="outline" size="sm">
+                  <Shield className="mr-2 h-4 w-4" />
+                  Admin
+                </Button>
+              </Link>
+            )}
             <UploadButton userId={user.id} onSuccess={handleUploadSuccess} />
             <Button variant="outline" size="icon" onClick={handleSignOut}>
               <LogOut className="h-4 w-4" />

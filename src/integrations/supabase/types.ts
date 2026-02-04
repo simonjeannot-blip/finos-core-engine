@@ -38,6 +38,27 @@ export type Database = {
         }
         Relationships: []
       }
+      app_settings: {
+        Row: {
+          disable_public_signups: boolean
+          id: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          disable_public_signups?: boolean
+          id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          disable_public_signups?: boolean
+          id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
       financial_ledger: {
         Row: {
           audit_id: string | null
@@ -91,6 +112,33 @@ export type Database = {
           },
         ]
       }
+      profiles: {
+        Row: {
+          created_at: string
+          email: string
+          id: string
+          is_approved: boolean
+          role: Database["public"]["Enums"]["user_role"]
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          id: string
+          is_approved?: boolean
+          role?: Database["public"]["Enums"]["user_role"]
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          id?: string
+          is_approved?: boolean
+          role?: Database["public"]["Enums"]["user_role"]
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       absolute_truth_calculator: {
@@ -108,10 +156,20 @@ export type Database = {
       }
     }
     Functions: {
-      [_ in never]: never
+      get_user_profile: {
+        Args: { _user_id: string }
+        Returns: {
+          email: string
+          id: string
+          is_approved: boolean
+          role: Database["public"]["Enums"]["user_role"]
+        }[]
+      }
+      is_super_admin: { Args: { _user_id: string }; Returns: boolean }
     }
     Enums: {
       ledger_category: "R" | "P" | "O" | "V" | "D" | "A"
+      user_role: "super_admin" | "manager" | "viewer"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -240,6 +298,7 @@ export const Constants = {
   public: {
     Enums: {
       ledger_category: ["R", "P", "O", "V", "D", "A"],
+      user_role: ["super_admin", "manager", "viewer"],
     },
   },
 } as const
