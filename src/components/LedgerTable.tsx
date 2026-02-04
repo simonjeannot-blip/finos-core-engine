@@ -81,7 +81,7 @@ export function LedgerTable({ entries, isLoading }: LedgerTableProps) {
           {entries.map((entry) => {
             const hasSentinelWarning =
               entry.category === "R" &&
-              checkVatSentinel(entry.net_amount, entry.vat_amount);
+              checkVatSentinel(entry.gross_amount, entry.vat_amount);
 
             return (
               <TableRow
@@ -124,8 +124,8 @@ export function LedgerTable({ entries, isLoading }: LedgerTableProps) {
                         <TooltipContent>
                           <p className="font-medium">VAT Sentinel Warning</p>
                           <p className="text-xs">
-                            VAT deviates from 1/6th rule (Net ÷ 6 ={" "}
-                            {formatCurrency(entry.net_amount / 6)})
+                            VAT deviates from 1/6th rule (Gross ÷ 6 ={" "}
+                            {formatCurrency(entry.gross_amount / 6)})
                           </p>
                         </TooltipContent>
                       </Tooltip>
