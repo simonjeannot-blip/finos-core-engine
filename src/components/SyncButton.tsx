@@ -50,10 +50,14 @@ export function SyncButton() {
         size="sm"
         onClick={handleForceSync}
         disabled={isSyncing}
-        className="gap-2"
+        className="gap-2 border-primary/50 hover:border-primary hover:bg-primary/10"
       >
-        <RefreshCw className="h-4 w-4" />
-        Sync System Logic
+        {isSyncing ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <RefreshCw className="h-4 w-4" />
+        )}
+        {isSyncing ? "Syncing..." : "Sync System Logic"}
       </Button>
 
       <Dialog open={isSyncing} onOpenChange={() => {}}>
