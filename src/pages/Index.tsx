@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
@@ -14,8 +14,8 @@ const CATEGORIES: LedgerCategory[] = ["R", "P", "O", "V", "D", "A"];
 export default function Index() {
   const navigate = useNavigate();
   const { user, loading: authLoading, signOut } = useAuth();
-  const { data: ledgerEntries, isLoading: ledgerLoading } = useLedger();
-  const { data: totals } = useAbsoluteTruth();
+  const { data: ledgerEntries, isLoading: ledgerLoading, refetch: refetchLedger } = useLedger();
+  const { data: totals, refetch: refetchTotals } = useAbsoluteTruth();
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -27,6 +27,12 @@ export default function Index() {
     await signOut();
     navigate("/auth");
   };
+
+  // Callback to refresh data after successful upload
+  const handleUploadSuccess = useCallback(() => {
+    refetchLedger();
+    refetchTotals();
+  }, [refetchLedger, refetchTotals]);
 
   if (authLoading) {
     return (
@@ -57,7 +63,7 @@ export default function Index() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <UploadButton />
+            <UploadButton userId={user.id} onSuccess={handleUploadSuccess} />
             <Button variant="outline" size="icon" onClick={handleSignOut}>
               <LogOut className="h-4 w-4" />
             </Button>
