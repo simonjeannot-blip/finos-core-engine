@@ -20,6 +20,8 @@ import {
   checkVatSentinel,
 } from "@/hooks/useLedger";
 import { cn } from "@/lib/utils";
+import { LedgerCardView } from "./LedgerCardView";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 interface LedgerTableProps {
   entries: LedgerEntry[];
@@ -27,6 +29,8 @@ interface LedgerTableProps {
 }
 
 export function LedgerTable({ entries, isLoading }: LedgerTableProps) {
+  const isMobile = useIsMobile();
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat("en-GB", {
       style: "currency",
@@ -41,6 +45,11 @@ export function LedgerTable({ entries, isLoading }: LedgerTableProps) {
       year: "numeric",
     });
   };
+
+  // Use card view on mobile
+  if (isMobile) {
+    return <LedgerCardView entries={entries} isLoading={isLoading} />;
+  }
 
   if (isLoading) {
     return (

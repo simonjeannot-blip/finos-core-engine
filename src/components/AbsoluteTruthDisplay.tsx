@@ -1,12 +1,16 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AbsoluteTruthTotals } from "@/hooks/useLedger";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 interface AbsoluteTruthDisplayProps {
   totals: AbsoluteTruthTotals | null;
+  prominent?: boolean;
 }
 
-export function AbsoluteTruthDisplay({ totals }: AbsoluteTruthDisplayProps) {
+export function AbsoluteTruthDisplay({ totals, prominent = false }: AbsoluteTruthDisplayProps) {
+  const isMobile = useIsMobile();
+  
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat("en-GB", {
       style: "currency",
@@ -23,6 +27,75 @@ export function AbsoluteTruthDisplay({ totals }: AbsoluteTruthDisplayProps) {
   const a = totals?.a_total ?? 0;
   const s = totals?.s_value ?? 0;
 
+  // Mobile prominent display - S value is the hero
+  if (isMobile || prominent) {
+    return (
+      <Card className="border-2 border-primary/20 bg-gradient-to-br from-card to-secondary/30">
+        <CardContent className="pt-6 pb-4 space-y-4">
+          {/* S Value - Hero display on mobile */}
+          <div className="text-center">
+            <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">
+              Absolute Truth
+            </p>
+            <p
+              className={cn(
+                "font-bold tracking-tight",
+                isMobile ? "text-5xl" : "text-4xl",
+                s >= 0 ? "text-category-r" : "text-category-p"
+              )}
+            >
+              {formatCurrency(s)}
+            </p>
+            <p className="text-xs text-muted-foreground mt-2">
+              S = (R - P) - (O + V + D + A)
+            </p>
+          </div>
+
+          {/* Breakdown - compact on mobile */}
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <div className="rounded-md bg-muted/50 p-2 text-center">
+              <span className="text-muted-foreground text-xs">Revenue - Purchases</span>
+              <p className="font-semibold">{formatCurrency(r - p)}</p>
+            </div>
+            <div className="rounded-md bg-muted/50 p-2 text-center">
+              <span className="text-muted-foreground text-xs">Overheads</span>
+              <p className="font-semibold">{formatCurrency(o + v + d + a)}</p>
+            </div>
+          </div>
+
+          {/* Category breakdown - 3 columns for better mobile fit */}
+          <div className="grid grid-cols-6 gap-1 text-xs">
+            <div className="text-center">
+              <p className="font-medium text-category-r">{formatCurrency(r)}</p>
+              <p className="text-muted-foreground">R</p>
+            </div>
+            <div className="text-center">
+              <p className="font-medium text-category-p">{formatCurrency(p)}</p>
+              <p className="text-muted-foreground">P</p>
+            </div>
+            <div className="text-center">
+              <p className="font-medium text-category-o">{formatCurrency(o)}</p>
+              <p className="text-muted-foreground">O</p>
+            </div>
+            <div className="text-center">
+              <p className="font-medium text-category-v">{formatCurrency(v)}</p>
+              <p className="text-muted-foreground">V</p>
+            </div>
+            <div className="text-center">
+              <p className="font-medium text-category-d">{formatCurrency(d)}</p>
+              <p className="text-muted-foreground">D</p>
+            </div>
+            <div className="text-center">
+              <p className="font-medium text-category-a">{formatCurrency(a)}</p>
+              <p className="text-muted-foreground">A</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Desktop display
   return (
     <Card className="border-2 border-primary/20 bg-gradient-to-br from-card to-secondary/30">
       <CardHeader className="pb-2">

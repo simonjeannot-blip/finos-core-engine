@@ -1,15 +1,17 @@
 import { useRef, useState } from "react";
-import { Upload, Loader2 } from "lucide-react";
+import { Camera, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { cn } from "@/lib/utils";
 
 interface UploadButtonProps {
   userId: string;
   onSuccess: () => void;
+  variant?: "default" | "floating";
 }
 
-export function UploadButton({ userId, onSuccess }: UploadButtonProps) {
+export function UploadButton({ userId, onSuccess, variant = "default" }: UploadButtonProps) {
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -126,25 +128,37 @@ export function UploadButton({ userId, onSuccess }: UploadButtonProps) {
     }
   };
 
+  const isFloating = variant === "floating";
+
   return (
     <>
+      {/* Camera input with capture for mobile - prompts "Take Photo or Choose Library" */}
       <input
         ref={fileInputRef}
         type="file"
         accept="image/jpeg,image/png,image/webp,image/heic"
+        capture="environment"
         onChange={handleFileChange}
         className="hidden"
       />
-      <Button onClick={handleClick} disabled={isProcessing} className="gap-2">
+      <Button
+        onClick={handleClick}
+        disabled={isProcessing}
+        size={isFloating ? "lg" : "default"}
+        className={cn(
+          "gap-2",
+          isFloating && "h-16 px-8 text-lg font-semibold shadow-lg"
+        )}
+      >
         {isProcessing ? (
           <>
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Parsing Absolute Truth...
+            <Loader2 className={cn("animate-spin", isFloating ? "h-6 w-6" : "h-4 w-4")} />
+            {isFloating ? "Parsing..." : "Parsing Absolute Truth..."}
           </>
         ) : (
           <>
-            <Upload className="h-4 w-4" />
-            Upload Receipt
+            <Camera className={cn(isFloating ? "h-6 w-6" : "h-4 w-4")} />
+            {isFloating ? "Scan Receipt" : "Upload Receipt"}
           </>
         )}
       </Button>
