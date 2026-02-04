@@ -57,6 +57,18 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        category: {
+          r: "hsl(var(--category-r))",
+          p: "hsl(var(--category-p))",
+          o: "hsl(var(--category-o))",
+          v: "hsl(var(--category-v))",
+          d: "hsl(var(--category-d))",
+          a: "hsl(var(--category-a))",
+        },
+        sentinel: {
+          warning: "hsl(var(--sentinel-warning))",
+          "warning-foreground": "hsl(var(--sentinel-warning-foreground))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
