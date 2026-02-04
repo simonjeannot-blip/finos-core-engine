@@ -6,6 +6,7 @@ import { CategoryCard } from "@/components/CategoryCard";
 import { AbsoluteTruthDisplay } from "@/components/AbsoluteTruthDisplay";
 import { LedgerTable } from "@/components/LedgerTable";
 import { UploadButton } from "@/components/UploadButton";
+import { SyncButton } from "@/components/SyncButton";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
 import { useLedger, useAbsoluteTruth, LedgerCategory } from "@/hooks/useLedger";
@@ -70,6 +71,8 @@ export default function Index() {
             )}
           </div>
           <div className="flex items-center gap-2 md:gap-3">
+            {/* Sync Button */}
+            {!isMobile && <SyncButton />}
             {isSuperAdmin && (
               <Link to="/admin">
                 <Button variant="outline" size={isMobile ? "icon" : "sm"}>
@@ -92,8 +95,11 @@ export default function Index() {
       <main className="container mx-auto px-4 py-4 md:py-6 space-y-6">
         {/* Mobile: Absolute Truth first and prominent */}
         {isMobile && (
-          <section>
+          <section className="space-y-3">
             <AbsoluteTruthDisplay totals={totals ?? null} prominent />
+            <div className="flex justify-center">
+              <SyncButton />
+            </div>
           </section>
         )}
 
