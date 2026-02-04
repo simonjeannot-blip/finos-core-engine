@@ -95,9 +95,9 @@ export function getCategoryTextColor(category: LedgerCategory): string {
   return colors[category];
 }
 
-export function checkVatSentinel(netAmount: number, vatAmount: number): boolean {
-  // VAT Sentinel: Check if VAT = Net / 6 (within tolerance for rounding)
-  const expectedVat = netAmount / 6;
-  const tolerance = 0.01; // 1 pence tolerance
+export function checkVatSentinel(grossAmount: number, vatAmount: number): boolean {
+  // VAT Sentinel: Check if VAT = Gross / 6 (within £0.02 tolerance for rounding)
+  const expectedVat = grossAmount / 6;
+  const tolerance = 0.02; // £0.02 tolerance
   return Math.abs(vatAmount - expectedVat) > tolerance;
 }
