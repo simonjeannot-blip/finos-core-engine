@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import { Camera, Loader2 } from "lucide-react";
+import { useRef, useState, useCallback } from "react";
+import { Camera, Loader2, RefreshCw } from "lucide-react";
 import imageCompression from "browser-image-compression";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -16,6 +16,11 @@ interface StabilizedImage {
   file: File;
   originalSize: number;
   compressedSize: number;
+}
+
+interface ProcessingContext {
+  publicUrl: string;
+  userId: string;
 }
 
 /**
@@ -88,7 +93,7 @@ async function invokeWithTimeout(
   functionName: string,
   body: Record<string, unknown>,
   timeoutMs: number = 60000
-): Promise<{ data: unknown; error: Error | null }> {
+): Promise<{ data: unknown; error: Error | null; status?: number }> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -114,39 +119,53 @@ async function invokeWithTimeout(
 
 /**
  * Format error for Steel Thread diagnostics
- * Provides exact error codes for Simon, Roberta, or Alessio to report
+ * Provides exact error codes and status codes for reporting
  */
-function formatSteelThreadError(error: unknown): { code: string; message: string } {
+function formatSteelThreadError(
+  error: unknown,
+  responseData?: { error?: string; message?: string; status_code?: number; details?: unknown }
+): { code: string; message: string; statusCode?: number; canRetry: boolean } {
+  // Check if we have structured error response from edge function
+  if (responseData?.error) {
+    const statusCode = responseData.status_code;
+    const canRetry = statusCode === 429 || statusCode === 503 || statusCode === 500;
+    
+    return {
+      code: responseData.error,
+      message: responseData.message || "Unknown error from server",
+      statusCode,
+      canRetry,
+    };
+  }
+
   if (error instanceof Error) {
     // Parse known error patterns
     if (error.message.includes("Failed to fetch")) {
       return {
         code: "NETWORK_FETCH_ERR",
         message: "Network connection failed. Check WiFi/cellular signal.",
+        canRetry: true,
       };
     }
     if (error.message.includes("TIMEOUT")) {
       return {
         code: "TIMEOUT_60S",
         message: "Server took too long. Try again with smaller image.",
+        canRetry: true,
       };
     }
     if (error.message.includes("IMG_COMPRESS")) {
       return {
         code: "IMG_COMPRESS_ERR",
         message: error.message,
+        canRetry: false,
       };
     }
-    if (error.message.includes("storage")) {
+    if (error.message.includes("storage") || error.message.includes("STORAGE")) {
       return {
         code: "STORAGE_ERR",
         message: error.message,
-      };
-    }
-    if (error.message.includes("Processing failed")) {
-      return {
-        code: "AI_PROCESS_ERR",
-        message: error.message,
+        canRetry: true,
       };
     }
     
@@ -154,12 +173,14 @@ function formatSteelThreadError(error: unknown): { code: string; message: string
     return {
       code: "UNKNOWN_ERR",
       message: error.message,
+      canRetry: true,
     };
   }
   
   return {
     code: "CRITICAL_ERR",
     message: String(error),
+    canRetry: false,
   };
 }
 
@@ -167,10 +188,108 @@ export function UploadButton({ userId, onSuccess, variant = "default" }: UploadB
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [lastUploadContext, setLastUploadContext] = useState<ProcessingContext | null>(null);
 
   const handleClick = () => {
     fileInputRef.current?.click();
   };
+
+  /**
+   * Process document with edge function - can be retried
+   */
+  const processDocument = useCallback(async (context: ProcessingContext) => {
+    toast({
+      title: "Parsing Absolute Truth...",
+      description: "AI analyzing receipt (60s timeout).",
+    });
+
+    const { data: functionData, error: functionError } = await invokeWithTimeout(
+      "process-document-ai",
+      {
+        document_url: context.publicUrl,
+        user_id: context.userId,
+      },
+      60000
+    ) as { 
+      data: { 
+        success?: boolean; 
+        entries_count?: number; 
+        error?: string; 
+        message?: string;
+        status_code?: number;
+        details?: unknown;
+      } | null; 
+      error: Error | null 
+    };
+
+    if (functionError) {
+      console.error("[Steel Thread] Function error:", functionError);
+      throw { error: functionError, responseData: functionData };
+    }
+
+    if (!functionData?.success) {
+      console.error("[Steel Thread] Processing failed:", functionData);
+      throw { error: new Error("Processing failed"), responseData: functionData };
+    }
+
+    return functionData;
+  }, [toast]);
+
+  /**
+   * Retry handler - reuses last upload context
+   */
+  const handleRetry = useCallback(async () => {
+    if (!lastUploadContext) {
+      toast({
+        variant: "destructive",
+        title: "Error Code: NO_RETRY_CONTEXT",
+        description: "No previous upload to retry. Please upload a new photo.",
+      });
+      return;
+    }
+
+    setIsProcessing(true);
+
+    try {
+      const result = await processDocument(lastUploadContext);
+      
+      toast({
+        title: "✓ Absolute Truth Captured",
+        description: `Created ${result.entries_count} ledger entries.`,
+      });
+
+      setLastUploadContext(null);
+      onSuccess();
+    } catch (thrown) {
+      const { error, responseData } = thrown as { error: unknown; responseData?: unknown };
+      const { code, message, statusCode, canRetry } = formatSteelThreadError(
+        error,
+        responseData as { error?: string; message?: string; status_code?: number; details?: unknown }
+      );
+      
+      const statusText = statusCode ? ` [HTTP ${statusCode}]` : "";
+      
+      toast({
+        variant: "destructive",
+        title: `Error Code: ${code}${statusText}`,
+        description: message,
+        duration: 15000,
+        action: canRetry ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRetry}
+            className="gap-1 shrink-0"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Retry
+          </Button>
+        ) : undefined,
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [lastUploadContext, processDocument, toast, onSuccess]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const originalFile = e.target.files?.[0];
@@ -200,6 +319,7 @@ export function UploadButton({ userId, onSuccess, variant = "default" }: UploadB
     }
 
     setIsProcessing(true);
+    setLastUploadContext(null);
 
     try {
       // Step 1: Universal Image Stabilization
@@ -238,7 +358,7 @@ export function UploadButton({ userId, onSuccess, variant = "default" }: UploadB
 
       if (uploadError) {
         console.error("Upload error:", uploadError);
-        throw new Error(`STORAGE_ERR: ${uploadError.message}`);
+        throw { error: new Error(`STORAGE_ERR: ${uploadError.message}`) };
       }
 
       // Step 3: Get public URL
@@ -249,48 +369,48 @@ export function UploadButton({ userId, onSuccess, variant = "default" }: UploadB
       const publicUrl = urlData.publicUrl;
       console.log("[Steel Thread] Receipt uploaded, public URL:", publicUrl);
 
-      // Step 4: Call edge function with 60-second timeout and proper headers
-      toast({
-        title: "Parsing Absolute Truth...",
-        description: "AI analyzing receipt (60s timeout).",
-      });
+      // Store context for potential retry
+      const context: ProcessingContext = { publicUrl, userId };
+      setLastUploadContext(context);
 
-      const { data: functionData, error: functionError } = await invokeWithTimeout(
-        "process-document-ai",
-        {
-          document_url: publicUrl,
-          user_id: userId,
-        },
-        60000 // 60 second timeout
-      ) as { data: { success: boolean; entries_count?: number; error?: string } | null; error: Error | null };
-
-      if (functionError) {
-        console.error("[Steel Thread] Function error:", functionError);
-        throw new Error(`AI_PROCESS_ERR: ${functionError.message}`);
-      }
-
-      if (!functionData?.success) {
-        console.error("[Steel Thread] Processing failed:", functionData);
-        throw new Error(`AI_PROCESS_ERR: ${functionData?.error || "Unknown AI processing error"}`);
-      }
+      // Step 4: Process with edge function
+      const result = await processDocument(context);
 
       // Success!
       toast({
         title: "✓ Absolute Truth Captured",
-        description: `Created ${functionData.entries_count} ledger entries.`,
+        description: `Created ${result.entries_count} ledger entries.`,
       });
 
+      setLastUploadContext(null);
       onSuccess();
-    } catch (error) {
-      console.error("[Steel Thread] Upload flow error:", error);
+    } catch (thrown) {
+      console.error("[Steel Thread] Upload flow error:", thrown);
       
-      const { code, message } = formatSteelThreadError(error);
+      const { error, responseData } = (thrown as { error?: unknown; responseData?: unknown }) || { error: thrown };
+      const { code, message, statusCode, canRetry } = formatSteelThreadError(
+        error,
+        responseData as { error?: string; message?: string; status_code?: number; details?: unknown }
+      );
+      
+      const statusText = statusCode ? ` [HTTP ${statusCode}]` : "";
       
       toast({
         variant: "destructive",
-        title: `Error Code: ${code}`,
+        title: `Error Code: ${code}${statusText}`,
         description: message,
-        duration: 10000, // Show for 10 seconds so user can read/report
+        duration: 15000,
+        action: canRetry && lastUploadContext ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRetry}
+            className="gap-1 shrink-0"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Retry
+          </Button>
+        ) : undefined,
       });
     } finally {
       setIsProcessing(false);
