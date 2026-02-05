@@ -59,8 +59,62 @@ export type Database = {
         }
         Relationships: []
       }
+      committed_accruals: {
+        Row: {
+          commitment_date: string
+          committed_amount: number
+          created_at: string
+          description: string | null
+          due_date: string | null
+          id: string
+          is_active: boolean
+          metadata: Json | null
+          settled_at: string | null
+          settled_ledger_id: string | null
+          user_id: string
+          vendor_name: string
+        }
+        Insert: {
+          commitment_date?: string
+          committed_amount?: number
+          created_at?: string
+          description?: string | null
+          due_date?: string | null
+          id?: string
+          is_active?: boolean
+          metadata?: Json | null
+          settled_at?: string | null
+          settled_ledger_id?: string | null
+          user_id: string
+          vendor_name: string
+        }
+        Update: {
+          commitment_date?: string
+          committed_amount?: number
+          created_at?: string
+          description?: string | null
+          due_date?: string | null
+          id?: string
+          is_active?: boolean
+          metadata?: Json | null
+          settled_at?: string | null
+          settled_ledger_id?: string | null
+          user_id?: string
+          vendor_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "committed_accruals_settled_ledger_id_fkey"
+            columns: ["settled_ledger_id"]
+            isOneToOne: false
+            referencedRelation: "financial_ledger"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       financial_ledger: {
         Row: {
+          attribution_id: string | null
           audit_id: string | null
           category: Database["public"]["Enums"]["ledger_category"]
           created_at: string
@@ -75,6 +129,7 @@ export type Database = {
           vendor_name: string
         }
         Insert: {
+          attribution_id?: string | null
           audit_id?: string | null
           category: Database["public"]["Enums"]["ledger_category"]
           created_at?: string
@@ -89,6 +144,7 @@ export type Database = {
           vendor_name: string
         }
         Update: {
+          attribution_id?: string | null
           audit_id?: string | null
           category?: Database["public"]["Enums"]["ledger_category"]
           created_at?: string
@@ -104,6 +160,13 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: "financial_ledger_attribution_id_fkey"
+            columns: ["attribution_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["attribution_id"]
+          },
+          {
             foreignKeyName: "financial_ledger_audit_id_fkey"
             columns: ["audit_id"]
             isOneToOne: false
@@ -111,6 +174,42 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      leads: {
+        Row: {
+          attribution_id: string
+          created_at: string
+          email: string
+          id: string
+          lead_source: string | null
+          logic_leaks: string | null
+          name: string
+          phone: string | null
+          user_id: string
+        }
+        Insert: {
+          attribution_id?: string
+          created_at?: string
+          email: string
+          id?: string
+          lead_source?: string | null
+          logic_leaks?: string | null
+          name: string
+          phone?: string | null
+          user_id: string
+        }
+        Update: {
+          attribution_id?: string
+          created_at?: string
+          email?: string
+          id?: string
+          lead_source?: string | null
+          logic_leaks?: string | null
+          name?: string
+          phone?: string | null
+          user_id?: string
+        }
+        Relationships: []
       }
       profiles: {
         Row: {
