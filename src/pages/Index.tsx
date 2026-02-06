@@ -9,10 +9,14 @@ import { UploadButton } from "@/components/UploadButton";
 import { SyncButton } from "@/components/SyncButton";
 import { LivePulse } from "@/components/LivePulse";
 import { CompliancePulse } from "@/components/CompliancePulse";
+import { StrategyToggle } from "@/components/StrategyToggle";
+import { SNumberHUD } from "@/components/SNumberHUD";
+import { StressTestChart } from "@/components/StressTestChart";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
 import { useLedger, useAbsoluteTruth, LedgerCategory } from "@/hooks/useLedger";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useStrategy } from "@/hooks/useStrategy";
 
 const CATEGORIES: LedgerCategory[] = ["R", "P", "O", "V", "D", "A"];
 
@@ -23,6 +27,7 @@ export default function Index() {
   const { isSuperAdmin } = useProfile();
   const { data: ledgerEntries, isLoading: ledgerLoading, refetch: refetchLedger } = useLedger();
   const { data: totals, refetch: refetchTotals } = useAbsoluteTruth();
+  const { strategy, setStrategy, result, allResults } = useStrategy();
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -127,6 +132,25 @@ export default function Index() {
                 total={getCategoryTotal(category)}
               />
             ))}
+          </div>
+        </section>
+
+        {/* Strategy Engine Section */}
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base md:text-lg font-semibold">
+              Reality Mirror™ Engine
+            </h2>
+            <StrategyToggle value={strategy} onChange={setStrategy} compact />
+          </div>
+          
+          <div className={isMobile ? "space-y-4" : "grid gap-6 md:grid-cols-2"}>
+            <SNumberHUD 
+              result={result} 
+              allResults={allResults} 
+              showBreakdown={!isMobile}
+            />
+            <StressTestChart results={allResults} activeStrategy={strategy} />
           </div>
         </section>
 
