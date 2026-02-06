@@ -8,6 +8,7 @@ import { LedgerTable } from "@/components/LedgerTable";
 import { UploadButton } from "@/components/UploadButton";
 import { SyncButton } from "@/components/SyncButton";
 import { LivePulse } from "@/components/LivePulse";
+import { CompliancePulse } from "@/components/CompliancePulse";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
 import { useLedger, useAbsoluteTruth, LedgerCategory } from "@/hooks/useLedger";
@@ -131,8 +132,9 @@ export default function Index() {
 
         {/* Absolute Truth Calculator - Desktop only (mobile shows at top) */}
         {!isMobile && (
-          <section className="max-w-md">
+          <section className="grid gap-6 md:grid-cols-2">
             <AbsoluteTruthDisplay totals={totals ?? null} />
+            <CompliancePulse totals={totals ?? null} />
           </section>
         )}
 
