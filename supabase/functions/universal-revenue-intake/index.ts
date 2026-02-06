@@ -1,14 +1,15 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // ═══════════════════════════════════════════════════════════════
-// MODUS ARMS — SOVEREIGN INTAKE ENGINE v3.0
+// MODUS ARMS — SOVEREIGN INTAKE ENGINE v4.0
 //
 // ARCHITECTURE: Raw-First, Parse-Second, AI-Enhanced
 // 1. Authenticate (Header OR URL fallback)
 // 2. LAND raw payload into raw_data_stream (PENDING)
 // 3. BRANCH:
 //    A) Structured data (?ts/?tz + vendor) → direct ledger write
-//    B) Image only (image_path) → Gemini AI parsing → ledger write
+//    B) Image only → Lovable AI Gateway parsing → ledger write
+//    B-FALLBACK) AI fails → placeholder ledger entry (never ERROR)
 // 4. Return 200 with status — data is ALWAYS safe
 // ═══════════════════════════════════════════════════════════════
 
@@ -426,14 +427,15 @@ Deno.serve(async (req) => {
 
       // ═════════════════════════════════════════════════════════
       // BRANCH B: AI RECEIPT PARSING PATHWAY
-      // Image provided without structured amounts → Gemini parse
+      // Image provided → Lovable AI Gateway → ledger write
+      // FALLBACK: If AI fails, create placeholder entry
       // ═════════════════════════════════════════════════════════
       if (imagePath) {
         console.log("🤖 BRANCH B: AI receipt parsing pathway");
 
-        const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-        if (!GEMINI_API_KEY) {
-          throw new Error("CONFIG_ERROR: GEMINI_API_KEY not configured for AI parsing");
+        const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+        if (!LOVABLE_API_KEY) {
+          console.error("❌ LOVABLE_API_KEY not configured — using fallback");
         }
 
         // 1. Resolve image public URL from storage path
@@ -458,72 +460,129 @@ Deno.serve(async (req) => {
         );
 
         const mimeType = imagePath.toLowerCase().includes(".png") ? "image/png" : "image/jpeg";
+        const dataUri = `data:${mimeType};base64,${base64Image}`;
         console.log(`📦 Image encoded: ${(imageBuffer.byteLength / 1024).toFixed(0)}KB as ${mimeType}`);
 
-        // 3. Call Gemini API
-        console.log("🧠 Calling Gemini 2.0 Flash for receipt analysis...");
-        const geminiResponse = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{
-                parts: [
-                  { text: RECEIPT_SYSTEM_PROMPT },
-                  { inline_data: { mime_type: mimeType, data: base64Image } },
-                ],
-              }],
-              generationConfig: {
-                temperature: 0.1,
-                topP: 0.95,
-                maxOutputTokens: 4096,
-              },
-            }),
-          }
-        );
+        // 3. AI PARSING — Try Lovable AI Gateway, then fallback
+        let sanitizedItems: Array<{
+          transaction_date: string;
+          vendor_name: string;
+          category: string;
+          pot_id: string | null;
+          net_amount: number;
+          vat_amount: number;
+          gross_amount: number;
+          description: string;
+        }>;
+        let aiParsed = false;
+        let aiError: string | null = null;
 
-        if (!geminiResponse.ok) {
-          const errorText = await geminiResponse.text();
-          console.error(`❌ Gemini API error: ${geminiResponse.status}`, errorText.substring(0, 300));
+        if (LOVABLE_API_KEY) {
+          try {
+            console.log("🧠 Calling Lovable AI Gateway (google/gemini-2.5-flash) with 60s timeout...");
 
-          if (geminiResponse.status === 429) {
-            throw new Error("GEMINI_RATE_LIMIT: API rate limit exceeded. Wait and retry.");
+            const aiController = new AbortController();
+            const aiTimeout = setTimeout(() => aiController.abort(), 60000);
+
+            const aiResponse = await fetch(
+              "https://ai.gateway.lovable.dev/v1/chat/completions",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "Authorization": `Bearer ${LOVABLE_API_KEY}`,
+                },
+                body: JSON.stringify({
+                  model: "google/gemini-2.5-flash",
+                  messages: [
+                    {
+                      role: "user",
+                      content: [
+                        { type: "text", text: RECEIPT_SYSTEM_PROMPT },
+                        { type: "image_url", image_url: { url: dataUri } },
+                      ],
+                    },
+                  ],
+                  temperature: 0.1,
+                  max_tokens: 4096,
+                }),
+                signal: aiController.signal,
+              }
+            );
+
+            clearTimeout(aiTimeout);
+
+            if (!aiResponse.ok) {
+              const errorText = await aiResponse.text();
+              console.error(`❌ AI Gateway error: ${aiResponse.status}`, errorText.substring(0, 300));
+              throw new Error(`AI_GATEWAY_ERR: HTTP ${aiResponse.status}`);
+            }
+
+            const aiData = await aiResponse.json();
+            const textResponse = aiData.choices?.[0]?.message?.content;
+
+            if (!textResponse) {
+              console.error("❌ No content from AI Gateway", JSON.stringify(aiData).substring(0, 300));
+              throw new Error("AI_EMPTY_RESPONSE: Gateway returned no content");
+            }
+
+            console.log("📄 AI Gateway response received, parsing...");
+
+            // JSON Shield — Parse with robust error handling
+            const extracted = extractJsonFromResponse(textResponse);
+            const parsedItems = Array.isArray(extracted) ? extracted : [extracted];
+            console.log(`✅ Parsed ${parsedItems.length} items from receipt`);
+
+            // Sanitize with graceful defaults
+            sanitizedItems = parsedItems.map((item: unknown, index: number) => {
+              const i = item as Record<string, unknown>;
+              return {
+                transaction_date: typeof i.transaction_date === "string" ? i.transaction_date : transactionDate,
+                vendor_name: typeof i.vendor_name === "string" && i.vendor_name.trim() ? i.vendor_name : "Manual Entry Needed",
+                category: ["R", "P", "O", "V", "D", "A"].includes(i.category as string) ? (i.category as string) : "O",
+                pot_id: typeof i.pot_id === "string" ? i.pot_id : null,
+                net_amount: typeof i.net_amount === "number" ? i.net_amount : parseFloat(String(i.net_amount)) || 0,
+                vat_amount: typeof i.vat_amount === "number" ? i.vat_amount : parseFloat(String(i.vat_amount)) || 0,
+                gross_amount: typeof i.gross_amount === "number" ? i.gross_amount : parseFloat(String(i.gross_amount)) || 0,
+                description: typeof i.description === "string" ? i.description : `Item ${index + 1}`,
+              };
+            });
+
+            aiParsed = true;
+
+          } catch (aiErr) {
+            const errMsg = aiErr instanceof Error ? aiErr.message : String(aiErr);
+
+            // Detect abort/timeout
+            if (aiErr instanceof Error && aiErr.name === "AbortError") {
+              aiError = "AI_TIMEOUT_60S: AI Gateway did not respond within 60 seconds";
+            } else {
+              aiError = errMsg;
+            }
+
+            console.warn(`⚠️ AI parsing failed: ${aiError} — using FALLBACK`);
           }
-          throw new Error(`GEMINI_API_ERR: HTTP ${geminiResponse.status}`);
         }
 
-        const geminiData = await geminiResponse.json();
-        const textResponse = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (!textResponse) {
-          console.error("❌ No text response from Gemini", JSON.stringify(geminiData).substring(0, 300));
-          throw new Error("GEMINI_EMPTY_RESPONSE: AI returned no text");
+        // ═══════════════════════════════════════════════════════
+        // FALLBACK: AI failed — create placeholder ledger entry
+        // The receipt image is preserved; human review needed
+        // ═══════════════════════════════════════════════════════
+        if (!aiParsed) {
+          console.log("🔄 BRANCH B FALLBACK: Creating placeholder ledger entry");
+          sanitizedItems = [{
+            transaction_date: transactionDate,
+            vendor_name: "Manual Entry Needed",
+            category: "O",
+            pot_id: null,
+            net_amount: 0,
+            vat_amount: 0,
+            gross_amount: 0,
+            description: `Receipt captured — AI review pending. ${aiError ? `Reason: ${aiError}` : "No AI key available."}`,
+          }];
         }
 
-        console.log("📄 Gemini response received, parsing...");
-
-        // 4. JSON Shield — Parse with robust error handling
-        const extracted = extractJsonFromResponse(textResponse);
-        const parsedItems = Array.isArray(extracted) ? extracted : [extracted];
-        console.log(`✅ Parsed ${parsedItems.length} items from receipt`);
-
-        // 5. Sanitize with graceful defaults
-        const sanitizedItems = parsedItems.map((item: unknown, index: number) => {
-          const i = item as Record<string, unknown>;
-          return {
-            transaction_date: typeof i.transaction_date === "string" ? i.transaction_date : transactionDate,
-            vendor_name: typeof i.vendor_name === "string" && i.vendor_name.trim() ? i.vendor_name : "Unknown Vendor",
-            category: ["R", "P", "O", "V", "D", "A"].includes(i.category as string) ? i.category : "O",
-            pot_id: typeof i.pot_id === "string" ? i.pot_id : null,
-            net_amount: typeof i.net_amount === "number" ? i.net_amount : parseFloat(String(i.net_amount)) || 0,
-            vat_amount: typeof i.vat_amount === "number" ? i.vat_amount : parseFloat(String(i.vat_amount)) || 0,
-            gross_amount: typeof i.gross_amount === "number" ? i.gross_amount : parseFloat(String(i.gross_amount)) || 0,
-            description: typeof i.description === "string" ? i.description : `Item ${index + 1}`,
-          };
-        });
-
-        // 6. Create audit log entry
+        // 4. Create audit log entry
         console.log("📝 Creating audit log entry...");
         const { data: auditLog, error: auditError } = await supabase
           .from("ai_audit_log")
@@ -542,7 +601,7 @@ Deno.serve(async (req) => {
 
         console.log(`✅ Audit log created: ${auditLog.id}`);
 
-        // 7. Create ledger entries
+        // 5. Create ledger entries
         console.log("📊 Creating ledger entries...");
         const ledgerEntries = sanitizedItems.map((item) => ({
           user_id: adminProfile.id,
@@ -559,7 +618,8 @@ Deno.serve(async (req) => {
             source: "universal-revenue-intake",
             data_source: dataSource,
             stream_id: streamId,
-            ai_parsed: true,
+            ai_parsed: aiParsed,
+            ai_error: aiError,
             image_url: imagePublicUrl,
             intake_timestamp: new Date().toISOString(),
           },
@@ -572,14 +632,14 @@ Deno.serve(async (req) => {
 
         if (ledgerError || !ledgerData) {
           console.error("❌ Ledger insert failed:", ledgerError);
-          // Rollback: delete audit log
           await supabase.from("ai_audit_log").delete().eq("id", auditLog.id);
           throw new Error(`LEDGER_WRITE_FAILED: ${ledgerError?.message || "Insert error"}`);
         }
 
-        console.log(`✅ Created ${ledgerData.length} ledger entries via AI parsing`);
+        const pipelineStatus = aiParsed ? "AI_COMPLETE" : "FALLBACK_COMPLETE";
+        console.log(`✅ Created ${ledgerData.length} ledger entries (${pipelineStatus})`);
 
-        // 8. Mark stream as PROCESSED
+        // 6. Mark stream as PROCESSED — always, even for fallback
         await supabase
           .from("raw_data_stream")
           .update({
@@ -599,7 +659,9 @@ Deno.serve(async (req) => {
         return new Response(
           JSON.stringify({
             success: true,
-            message: `AI parsed receipt: ${ledgerData.length} ledger entries created`,
+            message: aiParsed
+              ? `AI parsed receipt: ${ledgerData.length} ledger entries created`
+              : `Receipt captured with placeholder — manual review needed`,
             entries_count: ledgerData.length,
             data: {
               stream_id: streamId,
@@ -608,11 +670,13 @@ Deno.serve(async (req) => {
               entries_count: ledgerData.length,
               source: dataSource,
               image_url: imagePublicUrl,
+              ai_parsed: aiParsed,
+              ai_error: aiError,
               absolute_truth: {
                 s_value: truthData?.s_value ?? 0,
                 r_total: truthData?.r_total ?? 0,
               },
-              pipeline: "AI_COMPLETE",
+              pipeline: pipelineStatus,
               auth_method: authMethod,
               timestamp: new Date().toISOString(),
             },
