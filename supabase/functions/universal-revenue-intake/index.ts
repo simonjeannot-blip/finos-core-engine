@@ -1,14 +1,15 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // ═══════════════════════════════════════════════════════════════
-// MODUS ARMS — SOVEREIGN INTAKE ENGINE v2.0
-// 
-// ARCHITECTURE: Raw-First, Parse-Second
+// MODUS ARMS — SOVEREIGN INTAKE ENGINE v3.0
+//
+// ARCHITECTURE: Raw-First, Parse-Second, AI-Enhanced
 // 1. Authenticate (Header OR URL fallback)
 // 2. LAND raw payload into raw_data_stream (PENDING)
-// 3. Return 200 immediately — data is safe
-// 4. Attempt parse + ledger write (Sequential Lock)
-// 5. If parse fails → mark stream record as ERROR (data preserved)
+// 3. BRANCH:
+//    A) Structured data (?ts/?tz + vendor) → direct ledger write
+//    B) Image only (image_path) → Gemini AI parsing → ledger write
+// 4. Return 200 with status — data is ALWAYS safe
 // ═══════════════════════════════════════════════════════════════
 
 const corsHeaders = {
@@ -27,7 +28,93 @@ const corsHeaders = {
 // ?vendor=<name> → Vendor name
 // ?date=<YYYY-MM-DD> → Transaction date
 // ?source=<name> → Data source identifier (DOJO, EPOS, BANK)
+// ?image=<path> → Storage path to receipt image
 // ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// AI RECEIPT PARSING — Gemini System Prompt
+// ═══════════════════════════════════════════════════════════════
+const RECEIPT_SYSTEM_PROMPT = `You are a financial document parser for the Absolute Truth Protocol.
+
+Your task is to analyze receipt/invoice images and extract structured financial data.
+
+CATEGORIES (the six variables of the Absolute Truth formula S = (R-P) - (O+V+D+A)):
+- R (Revenue): Income received. IMPORTANT: Deduct any tips from gross revenue.
+- P (Product/COGS): Direct costs of goods sold - food, materials, inventory.
+- O (Operations): Operating expenses - utilities, rent, software, services.
+- V (VAT): Value Added Tax amounts.
+- D (Director's Loan Account): Owner drawings or loan repayments.
+- A (Accruals/Assets): Prepaid expenses, equipment, or deferred costs.
+
+RULES:
+1. Identify the vendor name and transaction date.
+2. Categorize each line item into R, P, O, V, D, or A.
+3. For multi-item receipts, split items appropriately (e.g., food → P, cleaning supplies → O).
+4. Calculate net_amount (before VAT), vat_amount, and gross_amount for each item.
+5. If VAT is included, extract it. UK VAT is typically 20% (so VAT = Gross / 6).
+6. Use pot_id for sub-categorization (e.g., P1 for food, P2 for packaging, O1 for utilities).
+7. Deduct tips from Revenue entries.
+
+GRACEFUL DEGRADATION - CRITICAL:
+- If the receipt is unclear, messy, or missing data points, DO NOT FAIL.
+- If you cannot determine a numerical value (net_amount, vat_amount, gross_amount), return 0.
+- If you cannot determine the vendor name, return "Unknown Vendor".
+- If you cannot determine the transaction date, return today's date.
+- If you cannot determine the category, default to "O" (Operations).
+- ALWAYS return at least one item, even if all values are 0.
+
+OUTPUT FORMAT (JSON array only, no markdown):
+[
+  {
+    "transaction_date": "YYYY-MM-DD",
+    "vendor_name": "string",
+    "category": "R" | "P" | "O" | "V" | "D" | "A",
+    "pot_id": "string or null",
+    "net_amount": number,
+    "vat_amount": number,
+    "gross_amount": number,
+    "description": "brief item description"
+  }
+]
+
+Return ONLY the JSON array. No explanations, no markdown code blocks.`;
+
+// ═══════════════════════════════════════════════════════════════
+// JSON SHIELD — Robust extraction with error recovery
+// ═══════════════════════════════════════════════════════════════
+function extractJsonFromResponse(response: string): unknown {
+  let cleaned = response
+    .replace(/```json\s*/gi, "")
+    .replace(/```\s*/g, "")
+    .trim();
+
+  const jsonStart = cleaned.indexOf("[");
+  const jsonEnd = cleaned.lastIndexOf("]");
+  const objStart = cleaned.indexOf("{");
+  const objEnd = cleaned.lastIndexOf("}");
+
+  if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+    cleaned = cleaned.substring(jsonStart, jsonEnd + 1);
+  } else if (objStart !== -1 && objEnd !== -1 && objEnd > objStart) {
+    cleaned = "[" + cleaned.substring(objStart, objEnd + 1) + "]";
+  } else {
+    throw new Error("MALFORMED_AI_RESPONSE: No JSON found in response");
+  }
+
+  cleaned = cleaned
+    .replace(/,\s*}/g, "}")
+    .replace(/,\s*]/g, "]")
+    .replace(/'/g, '"')
+    .replace(/\n/g, " ")
+    .replace(/\r/g, "");
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (parseError) {
+    console.error("JSON parse failed after cleanup:", cleaned.substring(0, 500));
+    throw new Error(`MALFORMED_AI_RESPONSE: ${parseError instanceof Error ? parseError.message : "Parse error"}`);
+  }
+}
 
 interface RawStreamRecord {
   id: string;
@@ -107,7 +194,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Extract all URL parameters
     const urlParams: Record<string, string | null> = {
       ts: url.searchParams.get("ts"),
       tz: url.searchParams.get("tz"),
@@ -118,7 +204,6 @@ Deno.serve(async (req) => {
       source: url.searchParams.get("source"),
     };
 
-    // Build the complete raw payload (body + URL params)
     const rawPayload: Record<string, unknown> = {
       ...bodyPayload,
       _url_params: urlParams,
@@ -127,17 +212,15 @@ Deno.serve(async (req) => {
       _method: req.method,
     };
 
-    // Determine source identifier
-    const dataSource = (urlParams.source || (bodyPayload.source as string) || "UNKNOWN").toUpperCase();
+    const dataSource = (
+      urlParams.source ||
+      (bodyPayload.source as string) ||
+      "UNKNOWN"
+    ).toUpperCase();
 
     // ═══════════════════════════════════════════════════════════
     // STEP 3: LAND RAW DATA (The Safety Net)
-    // Write to raw_data_stream BEFORE any parsing/processing.
-    // This guarantees 100% data retention regardless of what
-    // happens downstream.
     // ═══════════════════════════════════════════════════════════
-
-    // Resolve admin user for data ownership
     const { data: adminProfile, error: profileError } = await supabase
       .from("profiles")
       .select("id")
@@ -166,7 +249,6 @@ Deno.serve(async (req) => {
 
     if (streamError || !streamRecord) {
       console.error("❌ CRITICAL: Failed to land raw data:", streamError);
-      // This is the only true failure — we couldn't save the data at all
       return new Response(
         JSON.stringify({
           error: "STREAM_WRITE_FAILED",
@@ -182,8 +264,7 @@ Deno.serve(async (req) => {
 
     // ═══════════════════════════════════════════════════════════
     // STEP 4: THE SEQUENTIAL LOCK — Parse & Write to Ledger
-    // Only after raw data is safely stored do we attempt parsing.
-    // If parsing fails, data is preserved with ERROR status.
+    // Branches into: A) Structured Data  B) AI Image Parsing
     // ═══════════════════════════════════════════════════════════
 
     try {
@@ -191,7 +272,6 @@ Deno.serve(async (req) => {
       let amountGross: number | undefined;
       let amountVat: number | undefined;
 
-      // ?ts= Standard Tax (20% VAT auto-calculated)
       if (urlParams.ts) {
         const gross = parseFloat(urlParams.ts);
         if (!isNaN(gross)) {
@@ -201,7 +281,6 @@ Deno.serve(async (req) => {
         }
       }
 
-      // ?tz= Zero Tax (0% VAT)
       if (urlParams.tz) {
         const gross = parseFloat(urlParams.tz);
         if (!isNaN(gross)) {
@@ -211,7 +290,6 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Fallback to body values
       if (amountGross === undefined) {
         amountGross = typeof bodyPayload.amount_gross === "number" ? bodyPayload.amount_gross : undefined;
       }
@@ -219,151 +297,338 @@ Deno.serve(async (req) => {
         amountVat = typeof bodyPayload.amount_vat === "number" ? bodyPayload.amount_vat : undefined;
       }
 
-      // Vendor name
       const vendorName = (
         urlParams.vendor ||
         (bodyPayload.vendor_name as string) ||
         ""
       ).trim();
 
-      // Validation gate
-      if (amountGross === undefined || isNaN(amountGross)) {
-        throw new Error("PARSE_ERROR: amount_gross is missing or invalid. Use ?ts=, ?tz=, or body.amount_gross");
-      }
-      if (amountVat === undefined || isNaN(amountVat)) {
-        throw new Error("PARSE_ERROR: amount_vat could not be determined");
-      }
-      if (!vendorName) {
-        throw new Error("PARSE_ERROR: vendor_name is required (body or ?vendor= param)");
-      }
-
-      // Calculate net
-      const netAmount = amountGross - amountVat;
-
-      // --- Sequential Image Lock ---
-      let verifiedImageUrl: string | null = null;
-      const imagePath = urlParams.image || (bodyPayload.image_path as string);
-
-      if (imagePath) {
-        console.log(`🖼️ Verifying image: ${imagePath}`);
-        const { data: urlData } = supabase.storage.from("receipts").getPublicUrl(imagePath);
-
-        if (urlData?.publicUrl) {
-          const verifyResponse = await fetch(urlData.publicUrl, { method: "HEAD" });
-          if (verifyResponse.ok) {
-            verifiedImageUrl = urlData.publicUrl;
-            console.log(`✅ Image verified`);
-          } else {
-            console.warn(`⚠️ Image not found (HTTP ${verifyResponse.status}), proceeding without image`);
-          }
-        }
-      }
-
-      // --- Attribution validation ---
-      let validatedAttributionId: string | null = null;
-      const attributionId = urlParams.aid || (bodyPayload.attribution_id as string);
-
-      if (attributionId) {
-        const { data: leadData } = await supabase
-          .from("leads")
-          .select("attribution_id")
-          .eq("attribution_id", attributionId)
-          .single();
-
-        if (leadData) {
-          validatedAttributionId = attributionId;
-          console.log(`🔗 Attribution linked: ${validatedAttributionId}`);
-        } else {
-          console.warn(`⚠️ Attribution ID ${attributionId} not found, proceeding without`);
-        }
-      }
-
-      // --- Commit to financial_ledger ---
+      const imagePath = urlParams.image || (bodyPayload.image_path as string) || null;
       const transactionDate = urlParams.date || (bodyPayload.transaction_date as string) || new Date().toISOString().split("T")[0];
 
-      const { data: ledgerEntry, error: ledgerError } = await supabase
-        .from("financial_ledger")
-        .insert({
+      // --- Determine pathway ---
+      const hasStructuredData = amountGross !== undefined && !isNaN(amountGross) && amountVat !== undefined && !!vendorName;
+
+      // ═════════════════════════════════════════════════════════
+      // BRANCH A: STRUCTURED DATA PATHWAY
+      // Direct ledger write from URL params or body data
+      // ═════════════════════════════════════════════════════════
+      if (hasStructuredData) {
+        console.log("📋 BRANCH A: Structured data pathway");
+
+        const netAmount = amountGross! - amountVat!;
+
+        // Image verification (optional)
+        let verifiedImageUrl: string | null = null;
+        if (imagePath) {
+          const { data: urlData } = supabase.storage.from("receipts").getPublicUrl(imagePath);
+          if (urlData?.publicUrl) {
+            const verifyResponse = await fetch(urlData.publicUrl, { method: "HEAD" });
+            if (verifyResponse.ok) {
+              verifiedImageUrl = urlData.publicUrl;
+              console.log(`✅ Image verified`);
+            }
+          }
+        }
+
+        // Attribution validation (optional)
+        let validatedAttributionId: string | null = null;
+        const attributionId = urlParams.aid || (bodyPayload.attribution_id as string);
+        if (attributionId) {
+          const { data: leadData } = await supabase
+            .from("leads")
+            .select("attribution_id")
+            .eq("attribution_id", attributionId)
+            .single();
+          if (leadData) {
+            validatedAttributionId = attributionId;
+            console.log(`🔗 Attribution linked: ${validatedAttributionId}`);
+          }
+        }
+
+        // Commit to ledger
+        const { data: ledgerEntry, error: ledgerError } = await supabase
+          .from("financial_ledger")
+          .insert({
+            user_id: adminProfile.id,
+            transaction_date: transactionDate,
+            vendor_name: vendorName,
+            category: "R" as const,
+            net_amount: netAmount,
+            vat_amount: amountVat,
+            gross_amount: amountGross,
+            attribution_id: validatedAttributionId,
+            metadata: {
+              source: "universal-revenue-intake",
+              data_source: dataSource,
+              stream_id: streamId,
+              payment_method: (bodyPayload.payment_method as string) || "unknown",
+              intake_timestamp: new Date().toISOString(),
+              auth_method: authMethod,
+              image_url: verifiedImageUrl,
+              url_params: urlParams,
+            },
+          })
+          .select("id")
+          .single();
+
+        if (ledgerError || !ledgerEntry) {
+          throw new Error(`LEDGER_WRITE_FAILED: ${ledgerError?.message || "Unknown insert error"}`);
+        }
+
+        console.log(`✅ Ledger entry created: ${ledgerEntry.id}`);
+
+        // Mark stream as PROCESSED
+        await supabase
+          .from("raw_data_stream")
+          .update({
+            status: "PROCESSED",
+            processed_at: new Date().toISOString(),
+            ledger_entry_id: ledgerEntry.id,
+          })
+          .eq("id", streamId);
+
+        // Fetch updated S-Value
+        const { data: truthData } = await supabase
+          .from("absolute_truth_calculator")
+          .select("s_value, r_total")
+          .eq("user_id", adminProfile.id)
+          .single();
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: "Revenue intake processed — Absolute Truth updated",
+            entries_count: 1,
+            data: {
+              stream_id: streamId,
+              entry_id: ledgerEntry.id,
+              entries_count: 1,
+              net_revenue: netAmount,
+              gross_amount: amountGross,
+              vat_amount: amountVat,
+              vendor: vendorName,
+              source: dataSource,
+              attribution_id: validatedAttributionId,
+              image_url: verifiedImageUrl,
+              absolute_truth: {
+                s_value: truthData?.s_value ?? 0,
+                r_total: truthData?.r_total ?? 0,
+              },
+              pipeline: "COMPLETE",
+              auth_method: authMethod,
+              timestamp: new Date().toISOString(),
+            },
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // ═════════════════════════════════════════════════════════
+      // BRANCH B: AI RECEIPT PARSING PATHWAY
+      // Image provided without structured amounts → Gemini parse
+      // ═════════════════════════════════════════════════════════
+      if (imagePath) {
+        console.log("🤖 BRANCH B: AI receipt parsing pathway");
+
+        const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+        if (!GEMINI_API_KEY) {
+          throw new Error("CONFIG_ERROR: GEMINI_API_KEY not configured for AI parsing");
+        }
+
+        // 1. Resolve image public URL from storage path
+        const { data: urlData } = supabase.storage.from("receipts").getPublicUrl(imagePath);
+        if (!urlData?.publicUrl) {
+          throw new Error(`IMAGE_RESOLVE_FAILED: Could not resolve public URL for ${imagePath}`);
+        }
+
+        const imagePublicUrl = urlData.publicUrl;
+        console.log(`🖼️ Image resolved: ${imagePublicUrl}`);
+
+        // 2. Fetch image and convert to base64
+        console.log("📥 Fetching image for AI analysis...");
+        const imageResponse = await fetch(imagePublicUrl);
+        if (!imageResponse.ok) {
+          throw new Error(`IMAGE_FETCH_FAILED: HTTP ${imageResponse.status} fetching ${imagePublicUrl}`);
+        }
+
+        const imageBuffer = await imageResponse.arrayBuffer();
+        const base64Image = btoa(
+          new Uint8Array(imageBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
+        );
+
+        const mimeType = imagePath.toLowerCase().includes(".png") ? "image/png" : "image/jpeg";
+        console.log(`📦 Image encoded: ${(imageBuffer.byteLength / 1024).toFixed(0)}KB as ${mimeType}`);
+
+        // 3. Call Gemini API
+        console.log("🧠 Calling Gemini 2.0 Flash for receipt analysis...");
+        const geminiResponse = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { text: RECEIPT_SYSTEM_PROMPT },
+                  { inline_data: { mime_type: mimeType, data: base64Image } },
+                ],
+              }],
+              generationConfig: {
+                temperature: 0.1,
+                topP: 0.95,
+                maxOutputTokens: 4096,
+              },
+            }),
+          }
+        );
+
+        if (!geminiResponse.ok) {
+          const errorText = await geminiResponse.text();
+          console.error(`❌ Gemini API error: ${geminiResponse.status}`, errorText.substring(0, 300));
+
+          if (geminiResponse.status === 429) {
+            throw new Error("GEMINI_RATE_LIMIT: API rate limit exceeded. Wait and retry.");
+          }
+          throw new Error(`GEMINI_API_ERR: HTTP ${geminiResponse.status}`);
+        }
+
+        const geminiData = await geminiResponse.json();
+        const textResponse = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        if (!textResponse) {
+          console.error("❌ No text response from Gemini", JSON.stringify(geminiData).substring(0, 300));
+          throw new Error("GEMINI_EMPTY_RESPONSE: AI returned no text");
+        }
+
+        console.log("📄 Gemini response received, parsing...");
+
+        // 4. JSON Shield — Parse with robust error handling
+        const extracted = extractJsonFromResponse(textResponse);
+        const parsedItems = Array.isArray(extracted) ? extracted : [extracted];
+        console.log(`✅ Parsed ${parsedItems.length} items from receipt`);
+
+        // 5. Sanitize with graceful defaults
+        const sanitizedItems = parsedItems.map((item: unknown, index: number) => {
+          const i = item as Record<string, unknown>;
+          return {
+            transaction_date: typeof i.transaction_date === "string" ? i.transaction_date : transactionDate,
+            vendor_name: typeof i.vendor_name === "string" && i.vendor_name.trim() ? i.vendor_name : "Unknown Vendor",
+            category: ["R", "P", "O", "V", "D", "A"].includes(i.category as string) ? i.category : "O",
+            pot_id: typeof i.pot_id === "string" ? i.pot_id : null,
+            net_amount: typeof i.net_amount === "number" ? i.net_amount : parseFloat(String(i.net_amount)) || 0,
+            vat_amount: typeof i.vat_amount === "number" ? i.vat_amount : parseFloat(String(i.vat_amount)) || 0,
+            gross_amount: typeof i.gross_amount === "number" ? i.gross_amount : parseFloat(String(i.gross_amount)) || 0,
+            description: typeof i.description === "string" ? i.description : `Item ${index + 1}`,
+          };
+        });
+
+        // 6. Create audit log entry
+        console.log("📝 Creating audit log entry...");
+        const { data: auditLog, error: auditError } = await supabase
+          .from("ai_audit_log")
+          .insert({
+            user_id: adminProfile.id,
+            image_url: imagePublicUrl,
+            raw_json: sanitizedItems,
+          })
+          .select()
+          .single();
+
+        if (auditError) {
+          console.error("❌ Audit log failed:", auditError);
+          throw new Error(`DB_AUDIT_ERR: ${auditError.message}`);
+        }
+
+        console.log(`✅ Audit log created: ${auditLog.id}`);
+
+        // 7. Create ledger entries
+        console.log("📊 Creating ledger entries...");
+        const ledgerEntries = sanitizedItems.map((item) => ({
           user_id: adminProfile.id,
-          transaction_date: transactionDate,
-          vendor_name: vendorName,
-          category: "R" as const,
-          net_amount: netAmount,
-          vat_amount: amountVat,
-          gross_amount: amountGross,
-          attribution_id: validatedAttributionId,
+          audit_id: auditLog.id,
+          transaction_date: item.transaction_date,
+          vendor_name: item.vendor_name,
+          category: item.category,
+          pot_id: item.pot_id,
+          net_amount: item.net_amount,
+          vat_amount: item.vat_amount,
+          gross_amount: item.gross_amount,
           metadata: {
+            description: item.description,
             source: "universal-revenue-intake",
             data_source: dataSource,
             stream_id: streamId,
-            payment_method: (bodyPayload.payment_method as string) || "unknown",
+            ai_parsed: true,
+            image_url: imagePublicUrl,
             intake_timestamp: new Date().toISOString(),
-            auth_method: authMethod,
-            image_url: verifiedImageUrl,
-            url_params: urlParams,
           },
-        })
-        .select("id")
-        .single();
+        }));
 
-      if (ledgerError || !ledgerEntry) {
-        throw new Error(`LEDGER_WRITE_FAILED: ${ledgerError?.message || "Unknown insert error"}`);
+        const { data: ledgerData, error: ledgerError } = await supabase
+          .from("financial_ledger")
+          .insert(ledgerEntries)
+          .select("id");
+
+        if (ledgerError || !ledgerData) {
+          console.error("❌ Ledger insert failed:", ledgerError);
+          // Rollback: delete audit log
+          await supabase.from("ai_audit_log").delete().eq("id", auditLog.id);
+          throw new Error(`LEDGER_WRITE_FAILED: ${ledgerError?.message || "Insert error"}`);
+        }
+
+        console.log(`✅ Created ${ledgerData.length} ledger entries via AI parsing`);
+
+        // 8. Mark stream as PROCESSED
+        await supabase
+          .from("raw_data_stream")
+          .update({
+            status: "PROCESSED",
+            processed_at: new Date().toISOString(),
+            ledger_entry_id: ledgerData[0]?.id || null,
+          })
+          .eq("id", streamId);
+
+        // Fetch updated S-Value
+        const { data: truthData } = await supabase
+          .from("absolute_truth_calculator")
+          .select("s_value, r_total")
+          .eq("user_id", adminProfile.id)
+          .single();
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: `AI parsed receipt: ${ledgerData.length} ledger entries created`,
+            entries_count: ledgerData.length,
+            data: {
+              stream_id: streamId,
+              audit_id: auditLog.id,
+              entry_ids: ledgerData.map((e) => e.id),
+              entries_count: ledgerData.length,
+              source: dataSource,
+              image_url: imagePublicUrl,
+              absolute_truth: {
+                s_value: truthData?.s_value ?? 0,
+                r_total: truthData?.r_total ?? 0,
+              },
+              pipeline: "AI_COMPLETE",
+              auth_method: authMethod,
+              timestamp: new Date().toISOString(),
+            },
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
       }
 
-      console.log(`✅ Ledger entry created: ${ledgerEntry.id}`);
-
-      // --- Mark stream record as PROCESSED ---
-      await supabase
-        .from("raw_data_stream")
-        .update({
-          status: "PROCESSED",
-          processed_at: new Date().toISOString(),
-          ledger_entry_id: ledgerEntry.id,
-        })
-        .eq("id", streamId);
-
-      console.log(`✅ Stream record ${streamId} → PROCESSED`);
-
-      // --- Fetch updated S-Value ---
-      const { data: truthData } = await supabase
-        .from("absolute_truth_calculator")
-        .select("s_value, r_total")
-        .eq("user_id", adminProfile.id)
-        .single();
-
-      // ═══════════════════════════════════════════════════════════
-      // SUCCESS: Full pipeline completed
-      // ═══════════════════════════════════════════════════════════
-      return new Response(
-        JSON.stringify({
-          success: true,
-          message: "Revenue intake processed — Absolute Truth updated",
-          data: {
-            stream_id: streamId,
-            entry_id: ledgerEntry.id,
-            net_revenue: netAmount,
-            gross_amount: amountGross,
-            vat_amount: amountVat,
-            vendor: vendorName,
-            source: dataSource,
-            attribution_id: validatedAttributionId,
-            image_url: verifiedImageUrl,
-            absolute_truth: {
-              s_value: truthData?.s_value ?? 0,
-              r_total: truthData?.r_total ?? 0,
-            },
-            pipeline: "COMPLETE",
-            auth_method: authMethod,
-            timestamp: new Date().toISOString(),
-          },
-        }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      // ═════════════════════════════════════════════════════════
+      // BRANCH C: NO USABLE DATA
+      // ═════════════════════════════════════════════════════════
+      throw new Error("PARSE_ERROR: No amounts (?ts/?tz), vendor, or image_path provided. Cannot process.");
 
     } catch (parseError) {
       // ═══════════════════════════════════════════════════════════
       // PARSE/LEDGER FAILURE — Data is SAFE in raw_data_stream
-      // Mark as ERROR with detail, return 200 (data landed)
       // ═══════════════════════════════════════════════════════════
       const errorMessage = parseError instanceof Error ? parseError.message : String(parseError);
       console.error(`⚠️ Parse/Ledger failed for stream ${streamId}: ${errorMessage}`);
@@ -376,11 +641,11 @@ Deno.serve(async (req) => {
         })
         .eq("id", streamId);
 
-      // Return 200 — raw data is safely stored for forensic audit / retry
       return new Response(
         JSON.stringify({
           success: false,
-          message: "Raw data captured but parsing/ledger write failed. Data preserved for retry.",
+          message: "Raw data captured but processing failed. Data preserved for retry.",
+          entries_count: 0,
           data: {
             stream_id: streamId,
             status: "ERROR",
@@ -403,6 +668,7 @@ Deno.serve(async (req) => {
       JSON.stringify({
         error: "CATASTROPHIC_ERROR",
         message: error instanceof Error ? error.message : "Unknown critical failure",
+        entries_count: 0,
         code: "INTAKE_FATAL",
       }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
