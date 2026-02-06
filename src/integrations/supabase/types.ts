@@ -238,6 +238,50 @@ export type Database = {
         }
         Relationships: []
       }
+      raw_data_stream: {
+        Row: {
+          created_at: string
+          error_detail: string | null
+          id: string
+          ledger_entry_id: string | null
+          payload: Json
+          processed_at: string | null
+          source: string
+          status: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          error_detail?: string | null
+          id?: string
+          ledger_entry_id?: string | null
+          payload?: Json
+          processed_at?: string | null
+          source?: string
+          status?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          error_detail?: string | null
+          id?: string
+          ledger_entry_id?: string | null
+          payload?: Json
+          processed_at?: string | null
+          source?: string
+          status?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "raw_data_stream_ledger_entry_id_fkey"
+            columns: ["ledger_entry_id"]
+            isOneToOne: false
+            referencedRelation: "financial_ledger"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       system_audit_log: {
         Row: {
           action_type: string
