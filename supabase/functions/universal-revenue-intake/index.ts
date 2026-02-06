@@ -1,256 +1,143 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// ═══════════════════════════════════════════════════════════════
+// MODUS ARMS — SOVEREIGN INTAKE ENGINE v2.0
+// 
+// ARCHITECTURE: Raw-First, Parse-Second
+// 1. Authenticate (Header OR URL fallback)
+// 2. LAND raw payload into raw_data_stream (PENDING)
+// 3. Return 200 immediately — data is safe
+// 4. Attempt parse + ledger write (Sequential Lock)
+// 5. If parse fails → mark stream record as ERROR (data preserved)
+// ═══════════════════════════════════════════════════════════════
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-api-key",
+    "authorization, x-client-info, apikey, content-type, x-api-key, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
   "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
 };
 
-interface IntakePayload {
-  amount_gross?: number;
-  amount_vat?: number;
-  vendor_name?: string;
-  payment_method?: string;
-  transaction_date?: string;
-  image_path?: string; // Storage path for receipt image
-  attribution_id?: string;
-}
-
 // ═══════════════════════════════════════════════════════════════
 // URL PARAMETER MAPPING
-// ?ts=<gross> → Standard Tax Revenue (20% VAT calculated)
+// ?ts=<gross> → Standard Tax Revenue (20% VAT auto-calculated)
 // ?tz=<gross> → Zero Tax Revenue (0% VAT)
 // ?aid=<uuid> → Attribution ID for Click-to-Cover
 // ?key=<api_key> → Fallback auth for header-less hardware
 // ?vendor=<name> → Vendor name
 // ?date=<YYYY-MM-DD> → Transaction date
+// ?source=<name> → Data source identifier (DOJO, EPOS, BANK)
 // ═══════════════════════════════════════════════════════════════
 
+interface RawStreamRecord {
+  id: string;
+  source: string;
+  payload: Record<string, unknown>;
+  status: string;
+  error_detail: string | null;
+  processed_at: string | null;
+  ledger_entry_id: string | null;
+  user_id: string;
+  created_at: string;
+}
+
 Deno.serve(async (req) => {
-  // Handle CORS preflight
+  // CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
-  // Accept both POST and GET (for URL-based intake)
   if (req.method !== "POST" && req.method !== "GET") {
     return new Response(
-      JSON.stringify({ error: "METHOD_NOT_ALLOWED", message: "Only POST and GET requests accepted" }),
+      JSON.stringify({ error: "METHOD_NOT_ALLOWED", message: "Only POST and GET accepted" }),
       { status: 405, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
   try {
     const url = new URL(req.url);
-    
-    // ═══════════════════════════════════════════════════════════════
-    // PASSPORT CHECK: Validate API Key (Header OR URL Fallback)
-    // ═══════════════════════════════════════════════════════════════
+
+    // ═══════════════════════════════════════════════════════════
+    // STEP 1: ZERO-FRICTION AUTH (Header OR URL Fallback)
+    // ═══════════════════════════════════════════════════════════
     const intakeApiKey = Deno.env.get("INTAKE_ARM_KEY");
-    
+
     if (!intakeApiKey) {
-      console.error("INTAKE_ARM_KEY secret is not configured");
+      console.error("❌ INTAKE_ARM_KEY secret is not configured");
       return new Response(
-        JSON.stringify({ 
-          error: "AUTH_KEY_MISSING", 
-          message: "Server configuration error: API key not set" 
-        }),
+        JSON.stringify({ error: "AUTH_KEY_MISSING", message: "Server config error: API key not set" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // URL Parameter Fallback: Check header first, then URL param
     const headerKey = req.headers.get("x-api-key");
     const urlKey = url.searchParams.get("key");
     const providedKey = headerKey || urlKey;
-    
-    if (!providedKey) {
-      console.warn("Request missing authentication - no X-API-KEY header or ?key= param");
-      return new Response(
-        JSON.stringify({ 
-          error: "UNAUTHORIZED", 
-          message: "Missing authentication. Provide X-API-KEY header or ?key= parameter" 
-        }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
 
-    if (providedKey !== intakeApiKey) {
-      console.warn("Invalid API key provided via", headerKey ? "header" : "URL param");
+    if (!providedKey || providedKey !== intakeApiKey) {
+      console.warn("🚫 Auth failed:", providedKey ? "invalid key" : "no key provided");
       return new Response(
-        JSON.stringify({ 
-          error: "FORBIDDEN", 
-          message: "Invalid API key" 
+        JSON.stringify({
+          error: providedKey ? "FORBIDDEN" : "UNAUTHORIZED",
+          message: providedKey
+            ? "Invalid API key"
+            : "Missing auth. Provide X-API-KEY header or ?key= parameter",
         }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: providedKey ? 403 : 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const authMethod = headerKey ? "header" : "url_param";
-    console.log(`✅ API Key validated via ${authMethod}`);
+    console.log(`✅ Auth validated via ${authMethod}`);
 
-    // ═══════════════════════════════════════════════════════════════
-    // PARSE PAYLOAD: Body (POST) OR URL Parameters (GET)
-    // ═══════════════════════════════════════════════════════════════
-    let payload: IntakePayload = {};
-    
+    // ═══════════════════════════════════════════════════════════
+    // STEP 2: CAPTURE EVERYTHING — Build Raw Payload
+    // ═══════════════════════════════════════════════════════════
+    let bodyPayload: Record<string, unknown> = {};
+
     if (req.method === "POST") {
       try {
-        const body = await req.json();
-        payload = body;
+        bodyPayload = await req.json();
       } catch {
-        // Allow empty body if URL params are provided
-        console.log("No JSON body, checking URL parameters");
+        console.log("ℹ️ No JSON body, using URL parameters only");
       }
     }
 
-    // URL Parameter Mapping - override/supplement body values
-    const tsParam = url.searchParams.get("ts"); // Standard Tax (20% VAT)
-    const tzParam = url.searchParams.get("tz"); // Zero Tax (0% VAT)
-    const aidParam = url.searchParams.get("aid"); // Attribution ID
-    const vendorParam = url.searchParams.get("vendor");
-    const dateParam = url.searchParams.get("date");
-    const imageParam = url.searchParams.get("image");
+    // Extract all URL parameters
+    const urlParams: Record<string, string | null> = {
+      ts: url.searchParams.get("ts"),
+      tz: url.searchParams.get("tz"),
+      aid: url.searchParams.get("aid"),
+      vendor: url.searchParams.get("vendor"),
+      date: url.searchParams.get("date"),
+      image: url.searchParams.get("image"),
+      source: url.searchParams.get("source"),
+    };
 
-    // Process ?ts= (Standard Tax - calculate 20% VAT)
-    if (tsParam) {
-      const grossAmount = parseFloat(tsParam);
-      if (!isNaN(grossAmount)) {
-        payload.amount_gross = grossAmount;
-        // Standard UK VAT: gross includes 20% VAT, so VAT = gross * (20/120)
-        payload.amount_vat = Math.round((grossAmount * (20 / 120)) * 100) / 100;
-        console.log(`📊 Standard Tax intake: Gross £${grossAmount}, VAT £${payload.amount_vat}`);
-      }
-    }
+    // Build the complete raw payload (body + URL params)
+    const rawPayload: Record<string, unknown> = {
+      ...bodyPayload,
+      _url_params: urlParams,
+      _auth_method: authMethod,
+      _received_at: new Date().toISOString(),
+      _method: req.method,
+    };
 
-    // Process ?tz= (Zero Tax - 0% VAT)
-    if (tzParam) {
-      const grossAmount = parseFloat(tzParam);
-      if (!isNaN(grossAmount)) {
-        payload.amount_gross = grossAmount;
-        payload.amount_vat = 0;
-        console.log(`📊 Zero Tax intake: Gross £${grossAmount}, VAT £0`);
-      }
-    }
+    // Determine source identifier
+    const dataSource = (urlParams.source || (bodyPayload.source as string) || "UNKNOWN").toUpperCase();
 
-    // Process other URL params
-    if (aidParam) payload.attribution_id = aidParam;
-    if (vendorParam) payload.vendor_name = vendorParam;
-    if (dateParam) payload.transaction_date = dateParam;
-    if (imageParam) payload.image_path = imageParam;
+    // ═══════════════════════════════════════════════════════════
+    // STEP 3: LAND RAW DATA (The Safety Net)
+    // Write to raw_data_stream BEFORE any parsing/processing.
+    // This guarantees 100% data retention regardless of what
+    // happens downstream.
+    // ═══════════════════════════════════════════════════════════
 
-    // ═══════════════════════════════════════════════════════════════
-    // VALIDATION: Required fields
-    // ═══════════════════════════════════════════════════════════════
-    const { amount_gross, amount_vat, vendor_name, payment_method, transaction_date, image_path, attribution_id } = payload;
-
-    if (typeof amount_gross !== "number" || isNaN(amount_gross)) {
-      return new Response(
-        JSON.stringify({ 
-          error: "VALIDATION_ERROR", 
-          message: "amount_gross must be a valid number (or use ?ts= or ?tz= params)" 
-        }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    if (typeof amount_vat !== "number" || isNaN(amount_vat)) {
-      return new Response(
-        JSON.stringify({ 
-          error: "VALIDATION_ERROR", 
-          message: "amount_vat must be a valid number" 
-        }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    if (!vendor_name || typeof vendor_name !== "string") {
-      return new Response(
-        JSON.stringify({ 
-          error: "VALIDATION_ERROR", 
-          message: "vendor_name is required (body or ?vendor= param)" 
-        }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    console.log(`📦 Intake received: £${amount_gross} from ${vendor_name}`);
-
-    // ═══════════════════════════════════════════════════════════════
-    // SUPABASE CLIENT INIT
-    // ═══════════════════════════════════════════════════════════════
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-    // ═══════════════════════════════════════════════════════════════
-    // SEQUENTIAL IMAGE LOCK: Verify image URL before proceeding
-    // ═══════════════════════════════════════════════════════════════
-    let verified_image_url: string | null = null;
-
-    if (image_path) {
-      console.log(`🖼️ Verifying image: ${image_path}`);
-      
-      try {
-        const { data: urlData } = supabase.storage
-          .from("receipts")
-          .getPublicUrl(image_path);
-
-        if (!urlData?.publicUrl || typeof urlData.publicUrl !== "string") {
-          console.error("IMAGE_VERIFICATION_FAILED: getPublicUrl returned invalid data");
-          return new Response(
-            JSON.stringify({ 
-              error: "IMAGE_VERIFICATION_FAILED", 
-              message: "Unable to verify image URL. Upload may have failed.",
-              code: "IMG_URL_INVALID"
-            }),
-            { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-
-        // Additional verification: Check if the file exists by making a HEAD request
-        const verifyResponse = await fetch(urlData.publicUrl, { method: "HEAD" });
-        
-        if (!verifyResponse.ok) {
-          console.error(`IMAGE_NOT_FOUND: HEAD request returned ${verifyResponse.status}`);
-          return new Response(
-            JSON.stringify({ 
-              error: "IMAGE_NOT_FOUND", 
-              message: "Image file does not exist in storage. Upload may have failed.",
-              code: "IMG_404",
-              attempted_path: image_path
-            }),
-            { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-
-        verified_image_url = urlData.publicUrl;
-        console.log(`✅ Image verified: ${verified_image_url}`);
-        
-      } catch (imgError) {
-        console.error("Image verification error:", imgError);
-        return new Response(
-          JSON.stringify({ 
-            error: "IMAGE_VERIFICATION_ERROR", 
-            message: "Failed to verify image. Network or storage error.",
-            code: "IMG_VERIFY_ERR",
-            details: imgError instanceof Error ? imgError.message : "Unknown error"
-          }),
-          { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // ABSOLUTE TRUTH LOGIC: Calculate Net Revenue
-    // ═══════════════════════════════════════════════════════════════
-    const net_amount = amount_gross - amount_vat;
-    console.log(`💰 Calculated Net Revenue: £${net_amount} (Gross: £${amount_gross} - VAT: £${amount_vat})`);
-
-    // ═══════════════════════════════════════════════════════════════
-    // GET ADMIN USER FOR LEDGER ENTRY
-    // ═══════════════════════════════════════════════════════════════
+    // Resolve admin user for data ownership
     const { data: adminProfile, error: profileError } = await supabase
       .from("profiles")
       .select("id")
@@ -259,136 +146,264 @@ Deno.serve(async (req) => {
       .single();
 
     if (profileError || !adminProfile) {
-      console.error("Failed to find admin user for ledger entry:", profileError);
+      console.error("❌ No admin user found:", profileError);
       return new Response(
-        JSON.stringify({ 
-          error: "SYSTEM_ERROR", 
-          message: "No admin user configured to receive intake" 
-        }),
+        JSON.stringify({ error: "SYSTEM_ERROR", message: "No admin user configured" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // ATTRIBUTION VALIDATION (Click-to-Cover)
-    // ═══════════════════════════════════════════════════════════════
-    let validated_attribution_id: string | null = null;
-
-    if (attribution_id) {
-      // Verify the attribution_id exists in the leads table
-      const { data: leadData, error: leadError } = await supabase
-        .from("leads")
-        .select("attribution_id")
-        .eq("attribution_id", attribution_id)
-        .single();
-
-      if (leadError || !leadData) {
-        console.warn(`Attribution ID ${attribution_id} not found in leads table, proceeding without link`);
-      } else {
-        validated_attribution_id = attribution_id;
-        console.log(`🔗 Attribution linked: ${validated_attribution_id}`);
-      }
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // DATABASE GUARD: Only commit after all verifications pass
-    // ═══════════════════════════════════════════════════════════════
-    const ledgerEntry = {
-      user_id: adminProfile.id,
-      transaction_date: transaction_date || new Date().toISOString().split("T")[0],
-      vendor_name: vendor_name.trim(),
-      category: "R" as const,
-      net_amount: net_amount,
-      vat_amount: amount_vat,
-      gross_amount: amount_gross,
-      attribution_id: validated_attribution_id,
-      metadata: {
-        source: "universal-revenue-intake",
-        payment_method: payment_method || "unknown",
-        intake_timestamp: new Date().toISOString(),
-        auth_method: authMethod,
-        image_url: verified_image_url,
-        url_params_used: {
-          ts: tsParam || null,
-          tz: tzParam || null,
-          aid: aidParam || null,
-        },
-      },
-    };
-
-    console.log("📝 Committing ledger entry...");
-
-    const { data: insertedEntry, error: insertError } = await supabase
-      .from("financial_ledger")
-      .insert(ledgerEntry)
+    const { data: streamRecord, error: streamError } = await supabase
+      .from("raw_data_stream")
+      .insert({
+        source: dataSource,
+        payload: rawPayload,
+        status: "PENDING",
+        user_id: adminProfile.id,
+      })
       .select()
       .single();
 
-    if (insertError) {
-      console.error("Failed to insert ledger entry:", insertError);
+    if (streamError || !streamRecord) {
+      console.error("❌ CRITICAL: Failed to land raw data:", streamError);
+      // This is the only true failure — we couldn't save the data at all
       return new Response(
-        JSON.stringify({ 
-          error: "DATABASE_ERROR", 
-          message: "Failed to insert ledger entry",
-          code: "DB_INSERT_FAIL",
-          details: insertError.message 
+        JSON.stringify({
+          error: "STREAM_WRITE_FAILED",
+          message: "Failed to capture raw data. Retry the request.",
+          details: streamError?.message,
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    console.log(`✅ Ledger entry created: ${insertedEntry.id}`);
+    const streamId = (streamRecord as RawStreamRecord).id;
+    console.log(`📦 Raw data landed: stream_id=${streamId}, source=${dataSource}`);
 
-    // ═══════════════════════════════════════════════════════════════
-    // FETCH UPDATED ABSOLUTE TRUTH VALUE
-    // ═══════════════════════════════════════════════════════════════
-    const { data: truthData } = await supabase
-      .from("absolute_truth_calculator")
-      .select("s_value, r_total, a_total")
-      .eq("user_id", adminProfile.id)
-      .single();
+    // ═══════════════════════════════════════════════════════════
+    // STEP 4: THE SEQUENTIAL LOCK — Parse & Write to Ledger
+    // Only after raw data is safely stored do we attempt parsing.
+    // If parsing fails, data is preserved with ERROR status.
+    // ═══════════════════════════════════════════════════════════
 
-    const currentSValue = truthData?.s_value ?? 0;
-    const currentRTotal = truthData?.r_total ?? 0;
+    try {
+      // --- Parse amounts from URL params or body ---
+      let amountGross: number | undefined;
+      let amountVat: number | undefined;
 
-    console.log(`📊 New Absolute Truth (S): £${currentSValue} | Revenue Total: £${currentRTotal}`);
-
-    // ═══════════════════════════════════════════════════════════════
-    // SUCCESS RESPONSE
-    // ═══════════════════════════════════════════════════════════════
-    return new Response(
-      JSON.stringify({
-        success: true,
-        message: "Revenue intake processed successfully",
-        data: {
-          entry_id: insertedEntry.id,
-          net_revenue: net_amount,
-          gross_amount: amount_gross,
-          vat_amount: amount_vat,
-          vendor: vendor_name,
-          attribution_id: validated_attribution_id,
-          image_url: verified_image_url,
-          absolute_truth: {
-            s_value: currentSValue,
-            r_total: currentRTotal,
-          },
-          auth_method: authMethod,
-          timestamp: new Date().toISOString(),
-        },
-      }),
-      { 
-        status: 200, 
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+      // ?ts= Standard Tax (20% VAT auto-calculated)
+      if (urlParams.ts) {
+        const gross = parseFloat(urlParams.ts);
+        if (!isNaN(gross)) {
+          amountGross = gross;
+          amountVat = Math.round((gross * (20 / 120)) * 100) / 100;
+          console.log(`📊 Standard Tax: Gross £${gross}, VAT £${amountVat}`);
+        }
       }
-    );
+
+      // ?tz= Zero Tax (0% VAT)
+      if (urlParams.tz) {
+        const gross = parseFloat(urlParams.tz);
+        if (!isNaN(gross)) {
+          amountGross = gross;
+          amountVat = 0;
+          console.log(`📊 Zero Tax: Gross £${gross}, VAT £0`);
+        }
+      }
+
+      // Fallback to body values
+      if (amountGross === undefined) {
+        amountGross = typeof bodyPayload.amount_gross === "number" ? bodyPayload.amount_gross : undefined;
+      }
+      if (amountVat === undefined) {
+        amountVat = typeof bodyPayload.amount_vat === "number" ? bodyPayload.amount_vat : undefined;
+      }
+
+      // Vendor name
+      const vendorName = (
+        urlParams.vendor ||
+        (bodyPayload.vendor_name as string) ||
+        ""
+      ).trim();
+
+      // Validation gate
+      if (amountGross === undefined || isNaN(amountGross)) {
+        throw new Error("PARSE_ERROR: amount_gross is missing or invalid. Use ?ts=, ?tz=, or body.amount_gross");
+      }
+      if (amountVat === undefined || isNaN(amountVat)) {
+        throw new Error("PARSE_ERROR: amount_vat could not be determined");
+      }
+      if (!vendorName) {
+        throw new Error("PARSE_ERROR: vendor_name is required (body or ?vendor= param)");
+      }
+
+      // Calculate net
+      const netAmount = amountGross - amountVat;
+
+      // --- Sequential Image Lock ---
+      let verifiedImageUrl: string | null = null;
+      const imagePath = urlParams.image || (bodyPayload.image_path as string);
+
+      if (imagePath) {
+        console.log(`🖼️ Verifying image: ${imagePath}`);
+        const { data: urlData } = supabase.storage.from("receipts").getPublicUrl(imagePath);
+
+        if (urlData?.publicUrl) {
+          const verifyResponse = await fetch(urlData.publicUrl, { method: "HEAD" });
+          if (verifyResponse.ok) {
+            verifiedImageUrl = urlData.publicUrl;
+            console.log(`✅ Image verified`);
+          } else {
+            console.warn(`⚠️ Image not found (HTTP ${verifyResponse.status}), proceeding without image`);
+          }
+        }
+      }
+
+      // --- Attribution validation ---
+      let validatedAttributionId: string | null = null;
+      const attributionId = urlParams.aid || (bodyPayload.attribution_id as string);
+
+      if (attributionId) {
+        const { data: leadData } = await supabase
+          .from("leads")
+          .select("attribution_id")
+          .eq("attribution_id", attributionId)
+          .single();
+
+        if (leadData) {
+          validatedAttributionId = attributionId;
+          console.log(`🔗 Attribution linked: ${validatedAttributionId}`);
+        } else {
+          console.warn(`⚠️ Attribution ID ${attributionId} not found, proceeding without`);
+        }
+      }
+
+      // --- Commit to financial_ledger ---
+      const transactionDate = urlParams.date || (bodyPayload.transaction_date as string) || new Date().toISOString().split("T")[0];
+
+      const { data: ledgerEntry, error: ledgerError } = await supabase
+        .from("financial_ledger")
+        .insert({
+          user_id: adminProfile.id,
+          transaction_date: transactionDate,
+          vendor_name: vendorName,
+          category: "R" as const,
+          net_amount: netAmount,
+          vat_amount: amountVat,
+          gross_amount: amountGross,
+          attribution_id: validatedAttributionId,
+          metadata: {
+            source: "universal-revenue-intake",
+            data_source: dataSource,
+            stream_id: streamId,
+            payment_method: (bodyPayload.payment_method as string) || "unknown",
+            intake_timestamp: new Date().toISOString(),
+            auth_method: authMethod,
+            image_url: verifiedImageUrl,
+            url_params: urlParams,
+          },
+        })
+        .select("id")
+        .single();
+
+      if (ledgerError || !ledgerEntry) {
+        throw new Error(`LEDGER_WRITE_FAILED: ${ledgerError?.message || "Unknown insert error"}`);
+      }
+
+      console.log(`✅ Ledger entry created: ${ledgerEntry.id}`);
+
+      // --- Mark stream record as PROCESSED ---
+      await supabase
+        .from("raw_data_stream")
+        .update({
+          status: "PROCESSED",
+          processed_at: new Date().toISOString(),
+          ledger_entry_id: ledgerEntry.id,
+        })
+        .eq("id", streamId);
+
+      console.log(`✅ Stream record ${streamId} → PROCESSED`);
+
+      // --- Fetch updated S-Value ---
+      const { data: truthData } = await supabase
+        .from("absolute_truth_calculator")
+        .select("s_value, r_total")
+        .eq("user_id", adminProfile.id)
+        .single();
+
+      // ═══════════════════════════════════════════════════════════
+      // SUCCESS: Full pipeline completed
+      // ═══════════════════════════════════════════════════════════
+      return new Response(
+        JSON.stringify({
+          success: true,
+          message: "Revenue intake processed — Absolute Truth updated",
+          data: {
+            stream_id: streamId,
+            entry_id: ledgerEntry.id,
+            net_revenue: netAmount,
+            gross_amount: amountGross,
+            vat_amount: amountVat,
+            vendor: vendorName,
+            source: dataSource,
+            attribution_id: validatedAttributionId,
+            image_url: verifiedImageUrl,
+            absolute_truth: {
+              s_value: truthData?.s_value ?? 0,
+              r_total: truthData?.r_total ?? 0,
+            },
+            pipeline: "COMPLETE",
+            auth_method: authMethod,
+            timestamp: new Date().toISOString(),
+          },
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+
+    } catch (parseError) {
+      // ═══════════════════════════════════════════════════════════
+      // PARSE/LEDGER FAILURE — Data is SAFE in raw_data_stream
+      // Mark as ERROR with detail, return 200 (data landed)
+      // ═══════════════════════════════════════════════════════════
+      const errorMessage = parseError instanceof Error ? parseError.message : String(parseError);
+      console.error(`⚠️ Parse/Ledger failed for stream ${streamId}: ${errorMessage}`);
+
+      await supabase
+        .from("raw_data_stream")
+        .update({
+          status: "ERROR",
+          error_detail: errorMessage,
+        })
+        .eq("id", streamId);
+
+      // Return 200 — raw data is safely stored for forensic audit / retry
+      return new Response(
+        JSON.stringify({
+          success: false,
+          message: "Raw data captured but parsing/ledger write failed. Data preserved for retry.",
+          data: {
+            stream_id: streamId,
+            status: "ERROR",
+            error: errorMessage,
+            pipeline: "PARTIAL",
+            retry_available: true,
+            timestamp: new Date().toISOString(),
+          },
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
   } catch (error) {
-    console.error("Unexpected error in universal-revenue-intake:", error);
+    // ═══════════════════════════════════════════════════════════
+    // CATASTROPHIC FAILURE — Before raw data could be saved
+    // ═══════════════════════════════════════════════════════════
+    console.error("💥 Catastrophic intake error:", error);
     return new Response(
-      JSON.stringify({ 
-        error: "INTERNAL_ERROR", 
-        message: error instanceof Error ? error.message : "Unknown error occurred",
-        code: "UNEXPECTED_ERR"
+      JSON.stringify({
+        error: "CATASTROPHIC_ERROR",
+        message: error instanceof Error ? error.message : "Unknown critical failure",
+        code: "INTAKE_FATAL",
       }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
