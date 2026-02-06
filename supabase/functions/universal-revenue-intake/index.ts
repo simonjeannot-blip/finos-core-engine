@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // ═══════════════════════════════════════════════════════════════
-// MODUS ARMS — SOVEREIGN INTAKE ENGINE v4.0
+// MODUS ARMS — SOVEREIGN INTAKE ENGINE v4.1
 //
 // ARCHITECTURE: Raw-First, Parse-Second, AI-Enhanced
 // 1. Authenticate (Header OR URL fallback)
@@ -11,6 +11,11 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 //    B) Image only → Lovable AI Gateway parsing → ledger write
 //    B-FALLBACK) AI fails → placeholder ledger entry (never ERROR)
 // 4. Return 200 with status — data is ALWAYS safe
+//
+// V4.1 PATCH: Merchant & Non-VAT Protocol
+// - Accepts vat_amount: 0 for non-VAT-registered vendors
+// - Merchant card slips: AI deduces VAT as Gross / 6
+// - Metadata: vat_status tag (STANDARD, ZERO_OR_EXEMPT, DEDUCED)
 // ═══════════════════════════════════════════════════════════════
 
 const corsHeaders = {
@@ -52,9 +57,14 @@ RULES:
 2. Categorize each line item into R, P, O, V, D, or A.
 3. For multi-item receipts, split items appropriately (e.g., food → P, cleaning supplies → O).
 4. Calculate net_amount (before VAT), vat_amount, and gross_amount for each item.
-5. If VAT is included, extract it. UK VAT is typically 20% (so VAT = Gross / 6).
-6. Use pot_id for sub-categorization (e.g., P1 for food, P2 for packaging, O1 for utilities).
-7. Deduct tips from Revenue entries.
+5. Use pot_id for sub-categorization (e.g., P1 for food, P2 for packaging, O1 for utilities).
+6. Deduct tips from Revenue entries.
+
+VAT HANDLING — CRITICAL:
+- If VAT is explicitly listed on the receipt, extract those figures directly.
+- If the receipt is a MERCHANT CARD SLIP (e.g., Manhattan, SumUp, Zettle, iZettle, Square, Dojo, WorldPay) that shows only a total with no VAT breakdown, DEDUCE VAT as: vat_amount = gross_amount / 6, net_amount = gross_amount - vat_amount. Set vat_status to "DEDUCED".
+- If the vendor is clearly NOT VAT REGISTERED (e.g., small market stall, no VAT number on receipt, receipt states "not VAT registered"), return vat_amount: 0 and net_amount = gross_amount. Set vat_status to "ZERO_OR_EXEMPT".
+- Otherwise, assume standard UK VAT at 20% (VAT = Gross / 6). Set vat_status to "STANDARD".
 
 GRACEFUL DEGRADATION - CRITICAL:
 - If the receipt is unclear, messy, or missing data points, DO NOT FAIL.
@@ -74,7 +84,8 @@ OUTPUT FORMAT (JSON array only, no markdown):
     "net_amount": number,
     "vat_amount": number,
     "gross_amount": number,
-    "description": "brief item description"
+    "description": "brief item description",
+    "vat_status": "STANDARD" | "DEDUCED" | "ZERO_OR_EXEMPT"
   }
 ]
 
@@ -347,6 +358,9 @@ Deno.serve(async (req) => {
           }
         }
 
+        // Determine VAT status for metadata
+        const vatStatus = amountVat === 0 ? "ZERO_OR_EXEMPT" : urlParams.tz ? "ZERO_OR_EXEMPT" : "STANDARD";
+
         // Commit to ledger
         const { data: ledgerEntry, error: ledgerError } = await supabase
           .from("financial_ledger")
@@ -368,6 +382,7 @@ Deno.serve(async (req) => {
               auth_method: authMethod,
               image_url: verifiedImageUrl,
               url_params: urlParams,
+              vat_status: vatStatus,
             },
           })
           .select("id")
@@ -473,6 +488,7 @@ Deno.serve(async (req) => {
           vat_amount: number;
           gross_amount: number;
           description: string;
+          vat_status: string;
         }>;
         let aiParsed = false;
         let aiError: string | null = null;
@@ -536,15 +552,26 @@ Deno.serve(async (req) => {
             // Sanitize with graceful defaults
             sanitizedItems = parsedItems.map((item: unknown, index: number) => {
               const i = item as Record<string, unknown>;
+              const vatAmt = typeof i.vat_amount === "number" ? i.vat_amount : parseFloat(String(i.vat_amount)) || 0;
+              const grossAmt = typeof i.gross_amount === "number" ? i.gross_amount : parseFloat(String(i.gross_amount)) || 0;
+              const netAmt = typeof i.net_amount === "number" ? i.net_amount : parseFloat(String(i.net_amount)) || 0;
+
+              // Determine vat_status from AI response or deduce
+              let vatStatus = typeof i.vat_status === "string" ? i.vat_status : "STANDARD";
+              if (vatAmt === 0 && grossAmt > 0) {
+                vatStatus = "ZERO_OR_EXEMPT";
+              }
+
               return {
                 transaction_date: typeof i.transaction_date === "string" ? i.transaction_date : transactionDate,
                 vendor_name: typeof i.vendor_name === "string" && i.vendor_name.trim() ? i.vendor_name : "Manual Entry Needed",
                 category: ["R", "P", "O", "V", "D", "A"].includes(i.category as string) ? (i.category as string) : "O",
                 pot_id: typeof i.pot_id === "string" ? i.pot_id : null,
-                net_amount: typeof i.net_amount === "number" ? i.net_amount : parseFloat(String(i.net_amount)) || 0,
-                vat_amount: typeof i.vat_amount === "number" ? i.vat_amount : parseFloat(String(i.vat_amount)) || 0,
-                gross_amount: typeof i.gross_amount === "number" ? i.gross_amount : parseFloat(String(i.gross_amount)) || 0,
+                net_amount: netAmt,
+                vat_amount: vatAmt,
+                gross_amount: grossAmt,
                 description: typeof i.description === "string" ? i.description : `Item ${index + 1}`,
+                vat_status: vatStatus,
               };
             });
 
@@ -579,7 +606,9 @@ Deno.serve(async (req) => {
             vat_amount: 0,
             gross_amount: 0,
             description: `Receipt captured — AI review pending. ${aiError ? `Reason: ${aiError}` : "No AI key available."}`,
+            vat_status: "ZERO_OR_EXEMPT",
           }];
+
         }
 
         // 4. Create audit log entry
@@ -622,6 +651,7 @@ Deno.serve(async (req) => {
             ai_error: aiError,
             image_url: imagePublicUrl,
             intake_timestamp: new Date().toISOString(),
+            vat_status: item.vat_status || "STANDARD",
           },
         }));
 
