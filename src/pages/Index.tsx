@@ -14,6 +14,7 @@ import { SNumberHUD } from "@/components/SNumberHUD";
 import { StressTestChart } from "@/components/StressTestChart";
 import { OfflineModeIndicator } from "@/components/OfflineModeIndicator";
 import { ManualZReportForm, PendingReportsList } from "@/components/ManualZReportForm";
+import { BookingForm } from "@/components/BookingForm";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
 import { useAbsoluteTruth, LedgerCategory } from "@/hooks/useLedger";
@@ -120,6 +121,7 @@ export default function Index() {
                 isOffline={isOffline} 
               />
             )}
+            {!isMobile && <BookingForm onSuccess={refreshData} />}
             {isSuperAdmin && (
               <Link to="/admin">
                 <Button variant="outline" size={isMobile ? "icon" : "sm"}>
@@ -164,6 +166,7 @@ export default function Index() {
                 onSuccess={refreshData} 
                 isOffline={isOffline} 
               />
+              <BookingForm onSuccess={refreshData} />
             </div>
           </section>
         )}
