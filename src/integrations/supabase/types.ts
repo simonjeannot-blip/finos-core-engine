@@ -238,6 +238,39 @@ export type Database = {
         }
         Relationships: []
       }
+      system_audit_log: {
+        Row: {
+          action_type: string
+          changed_by: string | null
+          created_at: string
+          id: string
+          new_data_hash: string | null
+          old_data_hash: string | null
+          record_id: string
+          table_name: string
+        }
+        Insert: {
+          action_type: string
+          changed_by?: string | null
+          created_at?: string
+          id?: string
+          new_data_hash?: string | null
+          old_data_hash?: string | null
+          record_id: string
+          table_name: string
+        }
+        Update: {
+          action_type?: string
+          changed_by?: string | null
+          created_at?: string
+          id?: string
+          new_data_hash?: string | null
+          old_data_hash?: string | null
+          record_id?: string
+          table_name?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       absolute_truth_calculator: {
@@ -255,6 +288,20 @@ export type Database = {
       }
     }
     Functions: {
+      calculate_s_number: {
+        Args: { p_user_id: string }
+        Returns: {
+          a_total: number
+          calculated_at: string
+          d_total: number
+          hash: string
+          o_total: number
+          p_total: number
+          r_total: number
+          s_value: number
+          v_total: number
+        }[]
+      }
       get_user_profile: {
         Args: { _user_id: string }
         Returns: {
