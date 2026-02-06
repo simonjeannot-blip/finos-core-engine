@@ -19,8 +19,7 @@ interface StabilizedImage {
 }
 
 interface ProcessingContext {
-  publicUrl: string;
-  userId: string;
+  storagePath: string;
 }
 
 /**
@@ -86,30 +85,57 @@ function purgeMemory(refs: Array<File | Blob | null>) {
 }
 
 /**
- * Invoke Edge Function with Timeout and Stable Headers
- * 60-second timeout with proper Content-Type
+ * Sovereign Intake Fetch — Direct URL auth with HTML response guard
+ * Calls universal-revenue-intake with ?key= parameter
  */
-async function invokeWithTimeout(
-  functionName: string,
-  body: Record<string, unknown>,
+async function sovereignIntakeFetch(
+  storagePath: string,
   timeoutMs: number = 60000
-): Promise<{ data: unknown; error: Error | null; status?: number }> {
+): Promise<{
+  success: boolean;
+  message?: string;
+  entries_count?: number;
+  data?: Record<string, unknown>;
+  error?: string;
+}> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const intakeUrl = `${supabaseUrl}/functions/v1/universal-revenue-intake?key=FF_INTAKE_001_SECURE`;
+
   try {
-    const response = await supabase.functions.invoke(functionName, {
-      body,
-      headers: {
-        "Content-Type": "application/json",
-      },
+    const response = await fetch(intakeUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image_path: storagePath,
+        source: "RECEIPT_SCAN",
+      }),
+      signal: controller.signal,
     });
 
     clearTimeout(timeoutId);
-    return response;
+
+    // HTML Response Guard — detect non-JSON responses
+    const contentType = response.headers.get("content-type");
+    if (!contentType?.includes("application/json")) {
+      const textResponse = await response.text();
+      console.error("[Sovereign Intake] Expected JSON but got:", contentType);
+      console.error("[Sovereign Intake] Response preview:", textResponse.substring(0, 200));
+
+      if (textResponse.trim().startsWith("<!") || textResponse.includes("<html")) {
+        throw new Error(
+          `API returned HTML instead of JSON. Status: ${response.status}`
+        );
+      }
+      throw new Error(`Unexpected response format: ${contentType}`);
+    }
+
+    return await response.json();
   } catch (error) {
     clearTimeout(timeoutId);
-    
+
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("TIMEOUT_60S: Edge function did not respond within 60 seconds");
     }
@@ -195,44 +221,25 @@ export function UploadButton({ userId, onSuccess, variant = "default" }: UploadB
   };
 
   /**
-   * Process document with edge function - can be retried
+   * Process document via Sovereign Intake — can be retried
    */
   const processDocument = useCallback(async (context: ProcessingContext) => {
     toast({
       title: "Parsing Absolute Truth...",
-      description: "AI analyzing receipt (60s timeout).",
+      description: "AI analyzing receipt via Sovereign Intake (60s timeout).",
     });
 
-    const { data: functionData, error: functionError } = await invokeWithTimeout(
-      "process-document-ai",
-      {
-        document_url: context.publicUrl,
-        user_id: context.userId,
-      },
-      60000
-    ) as { 
-      data: { 
-        success?: boolean; 
-        entries_count?: number; 
-        error?: string; 
-        message?: string;
-        status_code?: number;
-        details?: unknown;
-      } | null; 
-      error: Error | null 
-    };
+    const result = await sovereignIntakeFetch(context.storagePath, 60000);
 
-    if (functionError) {
-      console.error("[Steel Thread] Function error:", functionError);
-      throw { error: functionError, responseData: functionData };
+    if (!result.success) {
+      console.error("[Sovereign Intake] Processing failed:", result);
+      throw {
+        error: new Error(result.error || result.message || "Processing failed"),
+        responseData: result,
+      };
     }
 
-    if (!functionData?.success) {
-      console.error("[Steel Thread] Processing failed:", functionData);
-      throw { error: new Error("Processing failed"), responseData: functionData };
-    }
-
-    return functionData;
+    return result;
   }, [toast]);
 
   /**
@@ -255,7 +262,7 @@ export function UploadButton({ userId, onSuccess, variant = "default" }: UploadB
       
       toast({
         title: "✓ Absolute Truth Captured",
-        description: `Created ${result.entries_count} ledger entries.`,
+        description: `Created ${result.entries_count || 0} ledger entries.`,
       });
 
       setLastUploadContext(null);
@@ -361,25 +368,20 @@ export function UploadButton({ userId, onSuccess, variant = "default" }: UploadB
         throw { error: new Error(`STORAGE_ERR: ${uploadError.message}`) };
       }
 
-      // Step 3: Get public URL
-      const { data: urlData } = supabase.storage
-        .from("receipts")
-        .getPublicUrl(uploadData.path);
+      // Step 3: Store context for Sovereign Intake
+      const storagePath = uploadData.path;
+      console.log("[Sovereign Intake] Receipt uploaded, storage path:", storagePath);
 
-      const publicUrl = urlData.publicUrl;
-      console.log("[Steel Thread] Receipt uploaded, public URL:", publicUrl);
-
-      // Store context for potential retry
-      const context: ProcessingContext = { publicUrl, userId };
+      const context: ProcessingContext = { storagePath };
       setLastUploadContext(context);
 
-      // Step 4: Process with edge function
+      // Step 4: Process via Sovereign Intake (AI parsing)
       const result = await processDocument(context);
 
       // Success!
       toast({
         title: "✓ Absolute Truth Captured",
-        description: `Created ${result.entries_count} ledger entries.`,
+        description: `Created ${result.entries_count || 0} ledger entries.`,
       });
 
       setLastUploadContext(null);
