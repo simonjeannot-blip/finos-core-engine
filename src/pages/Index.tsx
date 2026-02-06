@@ -12,11 +12,13 @@ import { CompliancePulse } from "@/components/CompliancePulse";
 import { StrategyToggle } from "@/components/StrategyToggle";
 import { SNumberHUD } from "@/components/SNumberHUD";
 import { StressTestChart } from "@/components/StressTestChart";
+import { OfflineModeIndicator } from "@/components/OfflineModeIndicator";
+import { ManualZReportForm, PendingReportsList } from "@/components/ManualZReportForm";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
-import { useLedger, useAbsoluteTruth, LedgerCategory } from "@/hooks/useLedger";
+import { useAbsoluteTruth, LedgerCategory } from "@/hooks/useLedger";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { useStrategy } from "@/hooks/useStrategy";
+import { useOfflineStrategy } from "@/hooks/useOfflineStrategy";
 
 const CATEGORIES: LedgerCategory[] = ["R", "P", "O", "V", "D", "A"];
 
@@ -25,9 +27,23 @@ export default function Index() {
   const isMobile = useIsMobile();
   const { user, loading: authLoading, signOut } = useAuth();
   const { isSuperAdmin } = useProfile();
-  const { data: ledgerEntries, isLoading: ledgerLoading, refetch: refetchLedger } = useLedger();
   const { data: totals, refetch: refetchTotals } = useAbsoluteTruth();
-  const { strategy, setStrategy, result, allResults } = useStrategy();
+  
+  // Use the new offline-aware strategy hook
+  const {
+    strategy,
+    setStrategy,
+    result,
+    allResults,
+    isOffline,
+    isUsingCache,
+    lastSyncTime,
+    latencyMs,
+    manualReports,
+    ledgerEntries,
+    isLoading: ledgerLoading,
+    refreshData,
+  } = useOfflineStrategy();
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -42,9 +58,9 @@ export default function Index() {
 
   // Callback to refresh data after successful upload
   const handleUploadSuccess = useCallback(() => {
-    refetchLedger();
+    refreshData();
     refetchTotals();
-  }, [refetchLedger, refetchTotals]);
+  }, [refreshData, refetchTotals]);
 
   if (authLoading) {
     return (
@@ -64,6 +80,8 @@ export default function Index() {
     return Number(totals[key]) || 0;
   };
 
+  const pendingReportsCount = manualReports.filter((r) => !r.synced).length;
+
   return (
     <div className="min-h-screen bg-background pb-24 md:pb-6">
       {/* Header - Compact on mobile */}
@@ -78,12 +96,30 @@ export default function Index() {
                 </p>
               )}
             </div>
-            {/* Live Pulse Indicator */}
-            <LivePulse />
+            {/* Status Indicators */}
+            <div className="flex items-center gap-2">
+              <LivePulse />
+              <OfflineModeIndicator
+                isOffline={isOffline}
+                isUsingCache={isUsingCache}
+                lastSyncTime={lastSyncTime}
+                latencyMs={latencyMs}
+                pendingReports={pendingReportsCount}
+                onRefresh={refreshData}
+                compact
+              />
+            </div>
           </div>
           <div className="flex items-center gap-2 md:gap-3">
             {/* Sync Button */}
             {!isMobile && <SyncButton />}
+            {/* Manual Z-Report Button */}
+            {!isMobile && (
+              <ManualZReportForm 
+                onSuccess={refreshData} 
+                isOffline={isOffline} 
+              />
+            )}
             {isSuperAdmin && (
               <Link to="/admin">
                 <Button variant="outline" size={isMobile ? "icon" : "sm"}>
@@ -103,13 +139,31 @@ export default function Index() {
         </div>
       </header>
 
+      {/* Offline Banner - Full width when offline */}
+      {(isOffline || isUsingCache) && (
+        <div className="container mx-auto px-4 pt-4">
+          <OfflineModeIndicator
+            isOffline={isOffline}
+            isUsingCache={isUsingCache}
+            lastSyncTime={lastSyncTime}
+            latencyMs={latencyMs}
+            pendingReports={pendingReportsCount}
+            onRefresh={refreshData}
+          />
+        </div>
+      )}
+
       <main className="container mx-auto px-4 py-4 md:py-6 space-y-6">
         {/* Mobile: Absolute Truth first and prominent */}
         {isMobile && (
           <section className="space-y-3">
             <AbsoluteTruthDisplay totals={totals ?? null} prominent />
-            <div className="flex justify-center">
+            <div className="flex justify-center gap-2">
               <SyncButton />
+              <ManualZReportForm 
+                onSuccess={refreshData} 
+                isOffline={isOffline} 
+              />
             </div>
           </section>
         )}
@@ -154,11 +208,21 @@ export default function Index() {
           </div>
         </section>
 
-        {/* Absolute Truth Calculator - Desktop only (mobile shows at top) */}
+        {/* Absolute Truth Calculator + Compliance Pulse + Pending Reports */}
         {!isMobile && (
-          <section className="grid gap-6 md:grid-cols-2">
+          <section className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             <AbsoluteTruthDisplay totals={totals ?? null} />
             <CompliancePulse totals={totals ?? null} />
+            {manualReports.length > 0 && (
+              <PendingReportsList reports={manualReports} />
+            )}
+          </section>
+        )}
+
+        {/* Mobile: Pending Reports */}
+        {isMobile && manualReports.length > 0 && (
+          <section>
+            <PendingReportsList reports={manualReports} />
           </section>
         )}
 
@@ -166,9 +230,14 @@ export default function Index() {
         <section>
           <h2 className="mb-3 md:mb-4 text-base md:text-lg font-semibold">
             {isMobile ? "Recent Transactions" : "Ledger Entries"}
+            {isUsingCache && (
+              <span className="ml-2 text-xs text-muted-foreground font-normal">
+                (cached)
+              </span>
+            )}
           </h2>
           <LedgerTable
-            entries={ledgerEntries ?? []}
+            entries={ledgerEntries}
             isLoading={ledgerLoading}
           />
         </section>
