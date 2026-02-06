@@ -59,6 +59,60 @@ export type Database = {
         }
         Relationships: []
       }
+      bookings: {
+        Row: {
+          attribution_id: string | null
+          booking_id: string
+          created_at: string
+          guest_email: string | null
+          guest_name: string
+          guest_phone: string | null
+          id: string
+          metadata: Json | null
+          party_size: number
+          raw_stream_id: string | null
+          reservation_time: string
+          source: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          attribution_id?: string | null
+          booking_id: string
+          created_at?: string
+          guest_email?: string | null
+          guest_name?: string
+          guest_phone?: string | null
+          id?: string
+          metadata?: Json | null
+          party_size?: number
+          raw_stream_id?: string | null
+          reservation_time: string
+          source?: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          attribution_id?: string | null
+          booking_id?: string
+          created_at?: string
+          guest_email?: string | null
+          guest_name?: string
+          guest_phone?: string | null
+          id?: string
+          metadata?: Json | null
+          party_size?: number
+          raw_stream_id?: string | null
+          reservation_time?: string
+          source?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       committed_accruals: {
         Row: {
           commitment_date: string

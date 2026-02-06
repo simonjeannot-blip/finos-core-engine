@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.universal-revenue-intake]
 verify_jwt = false
+
+[functions.universal-booking-intake]
+verify_jwt = false
