@@ -14,6 +14,51 @@ export type Database = {
   }
   public: {
     Tables: {
+      ad_campaigns: {
+        Row: {
+          campaign_name: string
+          clicks: number
+          created_at: string
+          date: string
+          engine_id: string
+          id: string
+          impressions: number
+          last_sync_at: string
+          metadata: Json | null
+          spend_amount: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          campaign_name: string
+          clicks?: number
+          created_at?: string
+          date?: string
+          engine_id: string
+          id?: string
+          impressions?: number
+          last_sync_at?: string
+          metadata?: Json | null
+          spend_amount?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          campaign_name?: string
+          clicks?: number
+          created_at?: string
+          date?: string
+          engine_id?: string
+          id?: string
+          impressions?: number
+          last_sync_at?: string
+          metadata?: Json | null
+          spend_amount?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       ai_audit_log: {
         Row: {
           created_at: string
