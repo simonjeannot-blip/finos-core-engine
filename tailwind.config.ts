@@ -69,6 +69,16 @@ export default {
           warning: "hsl(var(--sentinel-warning))",
           "warning-foreground": "hsl(var(--sentinel-warning-foreground))",
         },
+        siphon: {
+          charcoal: "hsl(var(--siphon-charcoal))",
+          "charcoal-foreground": "hsl(var(--siphon-charcoal-foreground))",
+          "charcoal-muted": "hsl(var(--siphon-charcoal-muted))",
+          "charcoal-border": "hsl(var(--siphon-charcoal-border))",
+          "charcoal-deep": "hsl(var(--siphon-charcoal-deep))",
+          connected: "hsl(var(--siphon-connected))",
+          "connected-foreground": "hsl(var(--siphon-connected-foreground))",
+          scanning: "hsl(var(--siphon-scanning))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

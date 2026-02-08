@@ -8,6 +8,7 @@ import { LedgerTable } from "@/components/LedgerTable";
 import { UploadButton } from "@/components/UploadButton";
 import { SyncButton } from "@/components/SyncButton";
 import { LivePulse } from "@/components/LivePulse";
+import { GhostSiphonPulse } from "@/components/GhostSiphonPulse";
 import { CompliancePulse } from "@/components/CompliancePulse";
 import { StrategyToggle } from "@/components/StrategyToggle";
 import { SNumberHUD } from "@/components/SNumberHUD";
@@ -100,6 +101,7 @@ export default function Index() {
             {/* Status Indicators */}
             <div className="flex items-center gap-2">
               <LivePulse />
+              <GhostSiphonPulse />
               <OfflineModeIndicator
                 isOffline={isOffline}
                 isUsingCache={isUsingCache}

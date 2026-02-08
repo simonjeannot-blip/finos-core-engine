@@ -50,6 +50,16 @@ All colors MUST be HSL.
     --sentinel-warning: 38 92% 50%;
     --sentinel-warning-foreground: 38 92% 15%;
 
+    /* Ghost Siphon — Industrial Minimalist */
+    --siphon-charcoal: 215 15% 18%;
+    --siphon-charcoal-foreground: 215 10% 88%;
+    --siphon-charcoal-muted: 215 10% 55%;
+    --siphon-charcoal-border: 215 12% 28%;
+    --siphon-charcoal-deep: 215 18% 12%;
+    --siphon-connected: 142 60% 45%;
+    --siphon-connected-foreground: 142 60% 98%;
+    --siphon-scanning: 38 90% 55%;
+
     --sidebar-background: 0 0% 98%;
     --sidebar-foreground: 240 5.3% 26.1%;
     --sidebar-primary: 240 5.9% 10%;
@@ -100,6 +110,16 @@ All colors MUST be HSL.
     /* Sentinel Warning (Dark) */
     --sentinel-warning: 38 90% 55%;
     --sentinel-warning-foreground: 38 90% 90%;
+
+    /* Ghost Siphon — Industrial Minimalist (Dark) */
+    --siphon-charcoal: 215 18% 14%;
+    --siphon-charcoal-foreground: 215 10% 90%;
+    --siphon-charcoal-muted: 215 10% 50%;
+    --siphon-charcoal-border: 215 12% 22%;
+    --siphon-charcoal-deep: 215 20% 8%;
+    --siphon-connected: 142 55% 50%;
+    --siphon-connected-foreground: 142 55% 98%;
+    --siphon-scanning: 38 85% 58%;
 
     --sidebar-background: 240 5.9% 10%;
     --sidebar-foreground: 240 4.8% 95.9%;

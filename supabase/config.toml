@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.ghost-ads-sync]
 verify_jwt = false
+
+[functions.microsoft-callback]
+verify_jwt = false
