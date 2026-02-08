@@ -251,7 +251,7 @@ async function logEndpointFailure(
   context: Record<string, unknown>
 ): Promise<void> {
   try {
-    await supabase.from("system_audit_log").insert({
+    const { error: auditError } = await supabase.from("system_audit_log").insert({
       table_name: "ad_campaigns",
       record_id: "00000000-0000-0000-0000-000000000000",
       action_type: "ENDPOINT_FAILURE",
@@ -264,9 +264,13 @@ async function logEndpointFailure(
       }),
       changed_by: null,
     });
-    console.log("[Ghost] 📝 ENDPOINT_FAILURE logged to system_audit_log");
-  } catch (auditError) {
-    console.error("[Ghost] ⚠️ Failed to write audit log:", auditError);
+    if (auditError) {
+      console.error(`[Ghost] ⚠️ Audit log insert rejected: ${auditError.message}`);
+    } else {
+      console.log("[Ghost] 📝 ENDPOINT_FAILURE logged to system_audit_log");
+    }
+  } catch (err) {
+    console.error("[Ghost] ⚠️ Failed to write audit log:", err);
   }
 }
 
