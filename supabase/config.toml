@@ -14,3 +14,6 @@ verify_jwt = false
 
 [functions.microsoft-callback]
 verify_jwt = false
+
+[functions.ghost-siphon-scan]
+verify_jwt = false

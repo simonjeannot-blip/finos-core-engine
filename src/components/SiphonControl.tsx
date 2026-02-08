@@ -3,15 +3,22 @@ import { useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Mail, Plug, RefreshCw, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Mail, Plug, RefreshCw, AlertTriangle, CheckCircle2, Scan, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSiphonStatus } from "@/hooks/useSiphonStatus";
+import { useSiphonScanner } from "@/hooks/useSiphonScanner";
 import { useToast } from "@/hooks/use-toast";
 
 export function SiphonControl() {
   const { state, expiresAt, updatedAt, tenantId, loading, initiateConnection, refresh } = useSiphonStatus();
+  const { scanning, lastScan, lastScanTime, error: scanError, todayCount, todayCountLoading, triggerScan, fetchTodayCount } = useSiphonScanner();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
+
+  // Load today's count on mount
+  useEffect(() => {
+    fetchTodayCount();
+  }, [fetchTodayCount]);
 
   // Handle OAuth callback redirects
   useEffect(() => {
@@ -22,7 +29,6 @@ export function SiphonControl() {
         description: "Master Inbox handshake complete. The Ghost is now siphoning.",
       });
       refresh();
-      // Clean URL
       searchParams.delete("siphon");
       setSearchParams(searchParams, { replace: true });
     } else if (siphonResult === "error") {
@@ -37,6 +43,23 @@ export function SiphonControl() {
       setSearchParams(searchParams, { replace: true });
     }
   }, [searchParams, setSearchParams, toast, refresh]);
+
+  const handleScan = async () => {
+    const result = await triggerScan();
+    if (result) {
+      toast({
+        title: "Scan Complete",
+        description: `${result.new_invoices} new invoice(s) siphoned. ${result.duplicates_skipped} duplicates skipped.`,
+      });
+      refresh(); // Refresh token status after scan
+    } else if (scanError) {
+      toast({
+        title: "Scan Failed",
+        description: scanError,
+        variant: "destructive",
+      });
+    }
+  };
 
   const getStatusBadge = () => {
     switch (state) {
@@ -68,6 +91,17 @@ export function SiphonControl() {
           </Badge>
         );
     }
+  };
+
+  const formatTimestamp = (date: Date | null): string => {
+    if (!date) return "—";
+    return date.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
   };
 
   return (
@@ -127,6 +161,40 @@ export function SiphonControl() {
           </div>
         )}
 
+        {/* Scanner Status Panel */}
+        {state === "connected" && (
+          <div className="rounded-md border border-siphon-connected/20 bg-siphon-connected/5 p-3 space-y-2">
+            <div className="flex items-center justify-between text-xs font-mono">
+              <span className="text-siphon-charcoal-muted">LAST SCANNED</span>
+              <span className="text-siphon-charcoal-foreground">
+                {formatTimestamp(lastScanTime)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-xs font-mono">
+              <span className="text-siphon-charcoal-muted">SIPHONED TODAY</span>
+              <span className="text-siphon-connected font-bold">
+                {todayCountLoading ? "…" : todayCount}
+              </span>
+            </div>
+            {lastScan && (
+              <>
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <span className="text-siphon-charcoal-muted">MESSAGES SCANNED</span>
+                  <span className="text-siphon-charcoal-foreground">
+                    {lastScan.messages_scanned}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <span className="text-siphon-charcoal-muted">NEW / DUPES</span>
+                  <span className="text-siphon-charcoal-foreground">
+                    {lastScan.new_invoices} / {lastScan.duplicates_skipped}
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Action Buttons */}
         <div className="flex gap-2">
           {state === "disconnected" || state === "error" ? (
@@ -139,15 +207,29 @@ export function SiphonControl() {
               {state === "error" ? "Re-authenticate" : "Connect Master Inbox"}
             </Button>
           ) : (
-            <Button
-              onClick={initiateConnection}
-              variant="outline"
-              disabled={loading}
-              className="border-siphon-charcoal-border text-siphon-charcoal-foreground hover:bg-siphon-charcoal-deep font-mono uppercase tracking-wider text-xs"
-            >
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Refresh Token
-            </Button>
+            <>
+              <Button
+                onClick={handleScan}
+                disabled={scanning}
+                className="bg-siphon-connected hover:bg-siphon-connected/90 text-siphon-connected-foreground font-mono uppercase tracking-wider text-xs"
+              >
+                {scanning ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Scan className="mr-2 h-4 w-4" />
+                )}
+                {scanning ? "Scanning…" : "Scan Inbox"}
+              </Button>
+              <Button
+                onClick={initiateConnection}
+                variant="outline"
+                disabled={loading}
+                className="border-siphon-charcoal-border text-siphon-charcoal-foreground hover:bg-siphon-charcoal-deep font-mono uppercase tracking-wider text-xs"
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Refresh Token
+              </Button>
+            </>
           )}
         </div>
 

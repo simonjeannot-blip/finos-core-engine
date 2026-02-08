@@ -9,6 +9,7 @@ import { UploadButton } from "@/components/UploadButton";
 import { SyncButton } from "@/components/SyncButton";
 import { LivePulse } from "@/components/LivePulse";
 import { GhostSiphonPulse } from "@/components/GhostSiphonPulse";
+import { SiphonScanStatus } from "@/components/SiphonScanStatus";
 import { CompliancePulse } from "@/components/CompliancePulse";
 import { StrategyToggle } from "@/components/StrategyToggle";
 import { SNumberHUD } from "@/components/SNumberHUD";
@@ -102,6 +103,7 @@ export default function Index() {
             <div className="flex items-center gap-2">
               <LivePulse />
               <GhostSiphonPulse />
+              <SiphonScanStatus />
               <OfflineModeIndicator
                 isOffline={isOffline}
                 isUsingCache={isUsingCache}
