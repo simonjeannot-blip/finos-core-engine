@@ -211,6 +211,63 @@ export type Database = {
           },
         ]
       }
+      discovered_invoices: {
+        Row: {
+          confidence: string
+          confidence_reason: string
+          created_at: string
+          file_size: number
+          filename: string
+          id: string
+          is_already_siphoned: boolean
+          is_known_supplier: boolean
+          message_id: string
+          received_at: string
+          scan_id: string
+          sender_address: string
+          sender_domain: string
+          sender_name: string
+          subject: string
+          user_id: string
+        }
+        Insert: {
+          confidence?: string
+          confidence_reason?: string
+          created_at?: string
+          file_size?: number
+          filename?: string
+          id?: string
+          is_already_siphoned?: boolean
+          is_known_supplier?: boolean
+          message_id: string
+          received_at?: string
+          scan_id?: string
+          sender_address?: string
+          sender_domain?: string
+          sender_name?: string
+          subject?: string
+          user_id: string
+        }
+        Update: {
+          confidence?: string
+          confidence_reason?: string
+          created_at?: string
+          file_size?: number
+          filename?: string
+          id?: string
+          is_already_siphoned?: boolean
+          is_known_supplier?: boolean
+          message_id?: string
+          received_at?: string
+          scan_id?: string
+          sender_address?: string
+          sender_domain?: string
+          sender_name?: string
+          subject?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       financial_ledger: {
         Row: {
           attribution_id: string | null

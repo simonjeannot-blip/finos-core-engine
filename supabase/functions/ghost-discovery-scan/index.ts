@@ -1,17 +1,27 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // ═══════════════════════════════════════════════════════════════
-// GHOST SIPHON — Deep Discovery Scanner v1.0
+// GHOST SIPHON — Deep Discovery Scanner v4.1.0
+//
+// v4.1.0 CHANGES:
+//   - Widened keyword net: Invoice, Statement, Bill, Amount Due,
+//     Total, Tax, Order + existing patterns
+//   - Consumer domain blocklist — skip personal Gmails etc.
+//   - Verbose RAW LOG for every attachment (accept or reject)
+//   - Persist discoveries to discovered_invoices table
 //
 // ARCHITECTURE: POST-triggered 30-day inbox forensic scan
 //   1. Refresh access_token using stored refresh_token
 //   2. Query Microsoft Graph for ALL PDF attachments (last 30 days)
 //   3. Extract & classify metadata with confidence scoring
 //   4. Cross-reference senders against known ledger vendors
-//   5. Return the full Supplier Intelligence Map
+//   5. Persist to discovered_invoices table
+//   6. Return the full Supplier Intelligence Map
 //
 // SCOPES REQUIRED: Mail.Read, Mail.ReadBasic
 // ═══════════════════════════════════════════════════════════════
+
+const VERSION = "v4.1.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -20,23 +30,49 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+const IMMUTABLE_CLIENT_ID = "9878609b-2022-47dc-bfef-0611cf133dbc";
 const MICROSOFT_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const GRAPH_API_BASE = "https://graph.microsoft.com/v1.0";
 const SCOPES = "openid offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadBasic";
 
 // ═══════════════════════════════════════════════════════════════
-// CONFIDENCE SCORING ENGINE
+// CONSUMER DOMAIN BLOCKLIST — Skip personal email accounts
+// These are high-volume consumer domains that never send invoices
+// ═══════════════════════════════════════════════════════════════
+const CONSUMER_DOMAINS = new Set([
+  "gmail.com", "googlemail.com",
+  "yahoo.com", "yahoo.co.uk", "yahoo.co.in",
+  "hotmail.com", "hotmail.co.uk",
+  "outlook.com", "live.com", "live.co.uk", "msn.com",
+  "aol.com",
+  "icloud.com", "me.com", "mac.com",
+  "protonmail.com", "proton.me",
+  "zoho.com",
+  "yandex.com", "yandex.ru",
+  "mail.com",
+  "gmx.com", "gmx.co.uk",
+  "fastmail.com",
+  "tutanota.com", "tuta.io",
+]);
+
+// ═══════════════════════════════════════════════════════════════
+// CONFIDENCE SCORING ENGINE — v4.1.0 WIDENED NET
 //
-// HIGH  (Dojo Green):  Contains "Invoice", "Bill", "Statement"
-//                      in subject or filename
+// HIGH  (Dojo Green):  Contains invoice/bill/statement keywords
+//                      OR amount/tax/total/order keywords
 // MEDIUM (Amber):      PDF from a known supplier domain but
-//                      no "Invoice" keyword
-// LOW   (Charcoal):    Miscellaneous PDFs
+//                      no keyword match
+// LOW   (Charcoal):    Business-domain PDFs with no keyword match
+//                      (still captured — never discarded)
 // ═══════════════════════════════════════════════════════════════
 const HIGH_CONFIDENCE_KEYWORDS = [
   "invoice", "bill", "statement", "receipt", "remittance",
   "payment", "purchase order", "po#", "credit note", "debit note",
   "inv-", "inv_", "inv #",
+  // v4.1.0 WIDENED NET
+  "amount due", "total", "tax", "order", "vat",
+  "balance due", "pay by", "due date", "account statement",
+  "pro forma", "proforma", "quotation", "quote",
 ];
 
 function classifyConfidence(
@@ -60,7 +96,7 @@ function classifyConfidence(
   }
 
   // Filename pattern match (INV-XXXX, Statement_Feb, etc.)
-  const invoicePattern = /\b(inv|invoice|bill|stmt|statement)[_\-\s]?\d*/i;
+  const invoicePattern = /\b(inv|invoice|bill|stmt|statement|order|quote)[_\-\s]?\d*/i;
   if (invoicePattern.test(filename)) {
     return {
       score: "HIGH",
@@ -76,10 +112,10 @@ function classifyConfidence(
     };
   }
 
-  // LOW: miscellaneous PDF
+  // LOW: any non-consumer business PDF — STILL CAPTURED
   return {
     score: "LOW",
-    reason: "No keyword or supplier match — miscellaneous PDF",
+    reason: "Non-consumer business domain PDF — no keyword match",
   };
 }
 
@@ -114,17 +150,15 @@ async function refreshAccessToken(refreshToken: string): Promise<{
   refresh_token: string;
   expires_in: number;
 }> {
-  // IMMUTABLE — Hard-coded to match Entra v4.0.0 registration
-  const clientId = "9878609b-2022-47dc-bfef-0611cf133dbc";
   const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET")!;
 
-  console.log("[Discovery] 🔄 Refreshing access token...");
+  console.log(`[Discovery ${VERSION}] 🔄 Refreshing access token...`);
 
   const response = await fetch(MICROSOFT_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: clientId,
+      client_id: IMMUTABLE_CLIENT_ID,
       client_secret: clientSecret,
       refresh_token: refreshToken,
       grant_type: "refresh_token",
@@ -135,12 +169,12 @@ async function refreshAccessToken(refreshToken: string): Promise<{
   const body = await response.text();
 
   if (!response.ok) {
-    console.error("[Discovery] ❌ Token refresh failed:", body);
+    console.error(`[Discovery ${VERSION}] ❌ Token refresh failed:`, body);
     throw new Error(`TOKEN_REFRESH_FAILED: ${response.status}`);
   }
 
   const data = JSON.parse(body);
-  console.log("[Discovery] ✅ Token refreshed.");
+  console.log(`[Discovery ${VERSION}] ✅ Token refreshed.`);
   return {
     access_token: data.access_token,
     refresh_token: data.refresh_token || refreshToken,
@@ -149,7 +183,7 @@ async function refreshAccessToken(refreshToken: string): Promise<{
 }
 
 // ═══════════════════════════════════════════════════════════════
-// GRAPH API — Paginated fetch for 30 days of messages
+// GRAPH API — Paginated fetch for messages with attachments
 // ═══════════════════════════════════════════════════════════════
 interface GraphMessage {
   id: string;
@@ -171,6 +205,8 @@ async function fetchAllMessagesWithAttachments(
   daysBack: number = 30
 ): Promise<GraphMessage[]> {
   const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+  // v4.1.0: Simplified filter — just hasAttachments + date range
+  // No complex filtering that triggers InefficientFilter errors
   const filter = `hasAttachments eq true and receivedDateTime ge ${since}`;
   const select = "id,receivedDateTime,subject,from,hasAttachments";
   const orderBy = "receivedDateTime desc";
@@ -180,10 +216,10 @@ async function fetchAllMessagesWithAttachments(
     `${GRAPH_API_BASE}/me/messages?$filter=${encodeURIComponent(filter)}&$select=${select}&$orderby=${encodeURIComponent(orderBy)}&$top=50`;
 
   let pageCount = 0;
-  const MAX_PAGES = 10; // Safety cap: 500 messages max
+  const MAX_PAGES = 20; // v4.1.0: Doubled from 10 to 20 (1000 messages)
 
   while (nextLink && pageCount < MAX_PAGES) {
-    console.log(`[Discovery] 📬 Fetching page ${pageCount + 1}...`);
+    console.log(`[Discovery ${VERSION}] 📬 Fetching page ${pageCount + 1}...`);
 
     const response = await fetch(nextLink, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -191,7 +227,7 @@ async function fetchAllMessagesWithAttachments(
 
     if (!response.ok) {
       const errorBody = await response.text();
-      console.error("[Discovery] ❌ Graph query failed:", response.status, errorBody);
+      console.error(`[Discovery ${VERSION}] ❌ Graph query failed:`, response.status, errorBody);
       throw new Error(`GRAPH_MESSAGES_FAILED: ${response.status}`);
     }
 
@@ -203,11 +239,11 @@ async function fetchAllMessagesWithAttachments(
     pageCount++;
   }
 
-  console.log(`[Discovery] 📊 Total messages found: ${allMessages.length} across ${pageCount} page(s)`);
+  console.log(`[Discovery ${VERSION}] 📊 Total messages with attachments: ${allMessages.length} across ${pageCount} page(s)`);
   return allMessages;
 }
 
-async function fetchPdfAttachments(
+async function fetchAllAttachments(
   accessToken: string,
   messageId: string
 ): Promise<GraphAttachment[]> {
@@ -218,18 +254,12 @@ async function fetchPdfAttachments(
   });
 
   if (!response.ok) {
-    console.warn(`[Discovery] ⚠️ Could not fetch attachments for ${messageId.slice(0, 12)}...`);
+    console.warn(`[Discovery ${VERSION}] ⚠️ Could not fetch attachments for ${messageId.slice(0, 12)}...`);
     return [];
   }
 
   const data = await response.json();
-  const attachments: GraphAttachment[] = data.value || [];
-
-  return attachments.filter(
-    (a) =>
-      a.contentType === "application/pdf" ||
-      a.name?.toLowerCase().endsWith(".pdf")
-  );
+  return data.value || [];
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -251,9 +281,9 @@ Deno.serve(async (req) => {
   const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-  // ═══════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════
   // AUTH GATE
-  // ═══════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════
   const authHeader = req.headers.get("authorization");
   if (!authHeader) {
     return new Response(
@@ -275,7 +305,11 @@ Deno.serve(async (req) => {
   }
 
   const userId = user.id;
-  console.log(`[Discovery] 🔒 Authenticated: ${userId.slice(0, 8)}...`);
+  console.log(`[Discovery ${VERSION}] 🔒 Authenticated: ${userId.slice(0, 8)}...`);
+
+  // Generate a unique scan_id for this run
+  const scanId = crypto.randomUUID();
+  console.log(`[Discovery ${VERSION}] 🆔 Scan ID: ${scanId.slice(0, 8)}...`);
 
   try {
     // ═══════════════════════════════════════════════════════
@@ -347,7 +381,6 @@ Deno.serve(async (req) => {
     if (ledgerVendors) {
       for (const v of ledgerVendors) {
         knownVendorNames.add(v.vendor_name.toLowerCase());
-        // Extract domain-like patterns from vendor names
         const domainMatch = v.vendor_name.match(/@?([\w.-]+\.\w{2,})/);
         if (domainMatch) {
           knownSupplierDomains.add(domainMatch[1].toLowerCase());
@@ -371,15 +404,15 @@ Deno.serve(async (req) => {
       }
     }
 
-    console.log(`[Discovery] 🏭 Known supplier domains: ${knownSupplierDomains.size}`);
+    console.log(`[Discovery ${VERSION}] 🏭 Known supplier domains: ${knownSupplierDomains.size}`);
 
     // ═══════════════════════════════════════════════════════
-    // STEP 4: Full 30-day inbox scan
+    // STEP 4: Full inbox scan
     // ═══════════════════════════════════════════════════════
     const messages = await fetchAllMessagesWithAttachments(accessToken, 30);
 
     // ═══════════════════════════════════════════════════════
-    // STEP 5: Extract, classify, and map
+    // STEP 5: Extract, classify, and map — RAW LOG PROTOCOL
     // ═══════════════════════════════════════════════════════
     interface DiscoveredInvoice {
       message_id: string;
@@ -409,15 +442,42 @@ Deno.serve(async (req) => {
     }
 
     let processedMessages = 0;
+    let totalAttachmentsSeen = 0;
+    let pdfAccepted = 0;
+    let nonPdfRejected = 0;
+    let consumerDomainSkipped = 0;
+
     for (const message of messages) {
-      const pdfs = await fetchPdfAttachments(accessToken, message.id);
+      const senderAddress = message.from?.emailAddress?.address || "unknown@unknown";
+      const senderName = message.from?.emailAddress?.name || senderAddress;
+      const senderDomain = senderAddress.split("@")[1]?.toLowerCase() || "unknown";
+
+      // Fetch ALL attachments (not just PDFs) for verbose logging
+      const allAttachments = await fetchAllAttachments(accessToken, message.id);
       processedMessages++;
 
-      for (const pdf of pdfs) {
-        const senderAddress = message.from?.emailAddress?.address || "unknown@unknown";
-        const senderName = message.from?.emailAddress?.name || senderAddress;
-        const senderDomain = senderAddress.split("@")[1]?.toLowerCase() || "unknown";
-        const dedupKey = `${message.id}::${pdf.id}`;
+      for (const att of allAttachments) {
+        totalAttachmentsSeen++;
+        const isPdf = att.contentType === "application/pdf" || att.name?.toLowerCase().endsWith(".pdf");
+        const isConsumer = CONSUMER_DOMAINS.has(senderDomain);
+
+        // ═══════════════════════════════════════════════════
+        // RAW LOG PROTOCOL — Log EVERY attachment, accept or reject
+        // ═══════════════════════════════════════════════════
+        if (!isPdf) {
+          nonPdfRejected++;
+          console.log(`[Discovery ${VERSION}] 📎 REJECTED (non-PDF) | ${senderDomain} | "${att.name}" | type=${att.contentType} | size=${att.size}`);
+          continue;
+        }
+
+        if (isConsumer) {
+          consumerDomainSkipped++;
+          console.log(`[Discovery ${VERSION}] 🚫 SKIPPED (consumer domain) | ${senderDomain} | "${att.name}" | ${senderAddress}`);
+          continue;
+        }
+
+        pdfAccepted++;
+        const dedupKey = `${message.id}::${att.id}`;
 
         // Track dates per sender for cadence analysis
         if (!senderDateMap[senderDomain]) {
@@ -427,7 +487,7 @@ Deno.serve(async (req) => {
 
         const { score, reason } = classifyConfidence(
           message.subject || "",
-          pdf.name || "",
+          att.name || "",
           senderDomain,
           knownSupplierDomains
         );
@@ -435,21 +495,82 @@ Deno.serve(async (req) => {
         const isKnown = knownSupplierDomains.has(senderDomain) ||
           knownVendorNames.has(senderName.toLowerCase());
 
-        discoveries.push({
+        const discovery: DiscoveredInvoice = {
           message_id: message.id,
           sender_name: senderName,
           sender_address: senderAddress,
           sender_domain: senderDomain,
           subject: message.subject || "(No Subject)",
-          filename: pdf.name,
-          file_size: pdf.size,
+          filename: att.name,
+          file_size: att.size,
           received_at: message.receivedDateTime,
           confidence: score,
           confidence_reason: reason,
           is_known_supplier: isKnown,
           is_already_siphoned: existingDedupKeys.has(dedupKey),
-        });
+        };
+
+        discoveries.push(discovery);
+
+        console.log(`[Discovery ${VERSION}] ✅ ACCEPTED | ${score} | ${senderDomain} | "${att.name}" | ${reason}`);
       }
+    }
+
+    console.log(`[Discovery ${VERSION}] 📊 RAW LOG SUMMARY:`);
+    console.log(`  Messages processed: ${processedMessages}`);
+    console.log(`  Total attachments seen: ${totalAttachmentsSeen}`);
+    console.log(`  PDFs accepted: ${pdfAccepted}`);
+    console.log(`  Non-PDFs rejected: ${nonPdfRejected}`);
+    console.log(`  Consumer domain skipped: ${consumerDomainSkipped}`);
+
+    // ═══════════════════════════════════════════════════════
+    // STEP 5.5: PERSIST discoveries to discovered_invoices table
+    // ═══════════════════════════════════════════════════════
+    if (discoveries.length > 0) {
+      console.log(`[Discovery ${VERSION}] 💾 Persisting ${discoveries.length} discoveries to DB...`);
+
+      // Clear previous scan results for this user
+      const { error: deleteError } = await supabase
+        .from("discovered_invoices")
+        .delete()
+        .eq("user_id", userId);
+      
+      if (deleteError) {
+        console.error(`[Discovery ${VERSION}] ⚠️ Failed to clear old discoveries:`, deleteError.message);
+      }
+
+      // Batch insert in chunks of 50
+      const batchSize = 50;
+      for (let i = 0; i < discoveries.length; i += batchSize) {
+        const batch = discoveries.slice(i, i + batchSize).map((d) => ({
+          user_id: userId,
+          scan_id: scanId,
+          message_id: d.message_id,
+          sender_name: d.sender_name,
+          sender_address: d.sender_address,
+          sender_domain: d.sender_domain,
+          subject: d.subject,
+          filename: d.filename,
+          file_size: d.file_size,
+          received_at: d.received_at,
+          confidence: d.confidence,
+          confidence_reason: d.confidence_reason,
+          is_known_supplier: d.is_known_supplier,
+          is_already_siphoned: d.is_already_siphoned,
+        }));
+
+        const { error: insertError } = await supabase
+          .from("discovered_invoices")
+          .insert(batch);
+
+        if (insertError) {
+          console.error(`[Discovery ${VERSION}] ❌ Batch insert failed (${i}-${i + batch.length}):`, insertError.message);
+        } else {
+          console.log(`[Discovery ${VERSION}] 💾 Batch ${Math.floor(i / batchSize) + 1} persisted (${batch.length} rows)`);
+        }
+      }
+    } else {
+      console.log(`[Discovery ${VERSION}] ⚠️ ZERO discoveries — nothing to persist`);
     }
 
     // ═══════════════════════════════════════════════════════
@@ -482,7 +603,6 @@ Deno.serve(async (req) => {
       if (!sp.sender_names.includes(d.sender_name)) {
         sp.sender_names.push(d.sender_name);
       }
-      // Upgrade confidence if higher
       const rank = { HIGH: 3, MEDIUM: 2, LOW: 1 };
       if (rank[d.confidence] > rank[sp.highest_confidence]) {
         sp.highest_confidence = d.confidence;
@@ -504,14 +624,20 @@ Deno.serve(async (req) => {
     // ═══════════════════════════════════════════════════════
     try {
       await supabase.from("system_audit_log").insert({
-        table_name: "siphoned_invoices",
+        table_name: "discovered_invoices",
         record_id: "00000000-0000-0000-0000-000000000000",
         action_type: "SYNC_SUCCESS",
         old_data_hash: null,
         new_data_hash: JSON.stringify({
           phase: "DISCOVERY_SCAN",
+          version: VERSION,
+          scan_id: scanId,
           user_id: userId,
           messages_scanned: processedMessages,
+          total_attachments_seen: totalAttachmentsSeen,
+          pdfs_accepted: pdfAccepted,
+          non_pdfs_rejected: nonPdfRejected,
+          consumer_domain_skipped: consumerDomainSkipped,
           total_pdfs_found: discoveries.length,
           high_confidence: discoveries.filter((d) => d.confidence === "HIGH").length,
           medium_confidence: discoveries.filter((d) => d.confidence === "MEDIUM").length,
@@ -524,18 +650,26 @@ Deno.serve(async (req) => {
         changed_by: null,
       });
     } catch (err) {
-      console.error("[Discovery] ⚠️ Audit log write failed:", err);
+      console.error(`[Discovery ${VERSION}] ⚠️ Audit log write failed:`, err);
     }
 
-    console.log(`[Discovery] ✅ Scan complete: ${discoveries.length} PDFs, ${suppliers.length} suppliers`);
+    console.log(`[Discovery ${VERSION}] ✅ Scan complete: ${discoveries.length} PDFs, ${suppliers.length} suppliers, scan_id=${scanId.slice(0, 8)}`);
 
     return new Response(
       JSON.stringify({
         status: "DISCOVERY_COMPLETE",
         siphon_state: "connected",
+        version: VERSION,
+        scan_id: scanId,
         scan_window_days: 30,
         messages_scanned: processedMessages,
         total_pdfs_found: discoveries.length,
+        raw_log: {
+          total_attachments_seen: totalAttachmentsSeen,
+          pdfs_accepted: pdfAccepted,
+          non_pdfs_rejected: nonPdfRejected,
+          consumer_domain_skipped: consumerDomainSkipped,
+        },
         summary: {
           high_confidence: discoveries.filter((d) => d.confidence === "HIGH").length,
           medium_confidence: discoveries.filter((d) => d.confidence === "MEDIUM").length,
@@ -558,13 +692,15 @@ Deno.serve(async (req) => {
     );
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    console.error(`[Discovery] ❌ Scan failed: ${errMsg}`);
+    console.error(`[Discovery ${VERSION}] ❌ Scan failed: ${errMsg}`);
 
     return new Response(
       JSON.stringify({
         error: "DISCOVERY_FAILED",
         message: errMsg,
         siphon_state: "error",
+        version: VERSION,
+        scan_id: scanId,
       }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
