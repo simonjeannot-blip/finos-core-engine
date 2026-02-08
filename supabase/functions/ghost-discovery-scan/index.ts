@@ -22,7 +22,7 @@ const corsHeaders = {
 
 const MICROSOFT_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const GRAPH_API_BASE = "https://graph.microsoft.com/v1.0";
-const SCOPES = "openid offline_access Mail.Read Mail.ReadBasic";
+const SCOPES = "openid offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadBasic";
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIDENCE SCORING ENGINE

@@ -24,7 +24,7 @@ const corsHeaders = {
 // ═══════════════════════════════════════════════════════════════
 const MICROSOFT_AUTH_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
 const MICROSOFT_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
-const SCOPES = "openid offline_access Mail.Read Mail.ReadBasic";
+const SCOPES = "openid offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadBasic";
 
 // Cache-buster version — bump on every deploy
 const VERSION = "v4.0.0";
