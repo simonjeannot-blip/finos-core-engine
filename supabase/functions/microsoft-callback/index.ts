@@ -25,7 +25,7 @@ const MICROSOFT_TOKEN_URL = `https://login.microsoftonline.com/${MICROSOFT_TENAN
 const SCOPES = "openid offline_access Mail.Read Mail.ReadBasic";
 
 // Cache-buster version — bump on every deploy
-const VERSION = "v3.3.0";
+const VERSION = "v3.4.0";
 
 // ═══════════════════════════════════════════════════════════════
 // HARD-CODED CLIENT ID — No env inference. Matches Entra exactly.
