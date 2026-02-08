@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.universal-booking-intake]
 verify_jwt = false
+
+[functions.ghost-ads-sync]
+verify_jwt = false
