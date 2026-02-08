@@ -8,6 +8,7 @@ interface SiphonStatus {
   state: SiphonConnectionState;
   expiresAt: Date | null;
   updatedAt: Date | null;
+  tenantId: string | null;
   loading: boolean;
 }
 
@@ -17,12 +18,13 @@ export function useSiphonStatus() {
     state: "disconnected",
     expiresAt: null,
     updatedAt: null,
+    tenantId: null,
     loading: true,
   });
 
   const checkStatus = useCallback(async () => {
     if (!user) {
-      setStatus({ state: "disconnected", expiresAt: null, updatedAt: null, loading: false });
+      setStatus({ state: "disconnected", expiresAt: null, updatedAt: null, tenantId: null, loading: false });
       return;
     }
 
@@ -30,44 +32,45 @@ export function useSiphonStatus() {
       // Query token record — RLS restricts to super_admins only
       const { data, error } = await (supabase
         .from("microsoft_oauth_tokens" as any)
-        .select("id, expires_at, updated_at, user_id")
+        .select("id, expires_at, updated_at, user_id, tenant_id")
         .limit(1)
         .maybeSingle() as any);
 
       if (error) {
         // RLS denial or table not accessible = disconnected state
         console.log("[Siphon] Token check: no access or no records");
-        setStatus({ state: "disconnected", expiresAt: null, updatedAt: null, loading: false });
+        setStatus({ state: "disconnected", expiresAt: null, updatedAt: null, tenantId: null, loading: false });
         return;
       }
 
       if (!data) {
-        setStatus({ state: "disconnected", expiresAt: null, updatedAt: null, loading: false });
+        setStatus({ state: "disconnected", expiresAt: null, updatedAt: null, tenantId: null, loading: false });
         return;
       }
 
       const expiresAt = new Date(data.expires_at);
       const now = new Date();
       const updatedAt = data.updated_at ? new Date(data.updated_at) : null;
+      const tenantId = data.tenant_id || null;
 
       // Token expired → re-auth required
       if (expiresAt <= now) {
-        setStatus({ state: "error", expiresAt, updatedAt, loading: false });
+        setStatus({ state: "error", expiresAt, updatedAt, tenantId, loading: false });
         return;
       }
 
       // Token expiring within 10 minutes → amber warning
       const tenMinutes = 10 * 60 * 1000;
       if (expiresAt.getTime() - now.getTime() < tenMinutes) {
-        setStatus({ state: "expiring", expiresAt, updatedAt, loading: false });
+        setStatus({ state: "expiring", expiresAt, updatedAt, tenantId, loading: false });
         return;
       }
 
       // Token valid → connected
-      setStatus({ state: "connected", expiresAt, updatedAt, loading: false });
+      setStatus({ state: "connected", expiresAt, updatedAt, tenantId, loading: false });
     } catch (err) {
       console.error("[Siphon] Status check error:", err);
-      setStatus({ state: "error", expiresAt: null, updatedAt: null, loading: false });
+      setStatus({ state: "error", expiresAt: null, updatedAt: null, tenantId: null, loading: false });
     }
   }, [user]);
 

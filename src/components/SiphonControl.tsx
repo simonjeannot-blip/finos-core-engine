@@ -9,7 +9,7 @@ import { useSiphonStatus } from "@/hooks/useSiphonStatus";
 import { useToast } from "@/hooks/use-toast";
 
 export function SiphonControl() {
-  const { state, expiresAt, updatedAt, loading, initiateConnection, refresh } = useSiphonStatus();
+  const { state, expiresAt, updatedAt, tenantId, loading, initiateConnection, refresh } = useSiphonStatus();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -100,6 +100,14 @@ export function SiphonControl() {
                 {state.toUpperCase()}
               </span>
             </div>
+            {tenantId && (
+              <div className="flex items-center justify-between text-xs font-mono">
+                <span className="text-siphon-charcoal-muted">TENANT</span>
+                <span className="text-siphon-charcoal-foreground tracking-tight">
+                  {tenantId.slice(0, 8)}…{tenantId.slice(-4)}
+                </span>
+              </div>
+            )}
             {expiresAt && (
               <div className="flex items-center justify-between text-xs font-mono">
                 <span className="text-siphon-charcoal-muted">TOKEN EXPIRES</span>
@@ -145,8 +153,9 @@ export function SiphonControl() {
 
         {/* Scope Information */}
         <div className="text-xs text-siphon-charcoal-muted font-mono space-y-1">
-          <p>SCOPES: offline_access · Mail.Read · Mail.ReadBasic</p>
+          <p>SCOPES: openid · offline_access · Mail.Read · Mail.ReadBasic</p>
           <p>PROTOCOL: OAuth 2.0 Authorization Code Flow</p>
+          <p>TENANT: /common/ (Multi-Tenant Identity Bridge)</p>
         </div>
       </CardContent>
     </Card>
