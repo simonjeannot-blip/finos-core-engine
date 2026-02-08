@@ -310,6 +310,39 @@ export type Database = {
         }
         Relationships: []
       }
+      microsoft_oauth_tokens: {
+        Row: {
+          access_token: string
+          created_at: string
+          expires_at: string
+          id: string
+          refresh_token: string
+          scopes: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          access_token: string
+          created_at?: string
+          expires_at: string
+          id?: string
+          refresh_token: string
+          scopes?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          access_token?: string
+          created_at?: string
+          expires_at?: string
+          id?: string
+          refresh_token?: string
+          scopes?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
@@ -374,6 +407,69 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "raw_data_stream_ledger_entry_id_fkey"
+            columns: ["ledger_entry_id"]
+            isOneToOne: false
+            referencedRelation: "financial_ledger"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      siphoned_invoices: {
+        Row: {
+          accrual_entry_id: string | null
+          amount_detected: number | null
+          attachment_name: string | null
+          created_at: string
+          id: string
+          ledger_entry_id: string | null
+          raw_json: Json | null
+          received_at: string
+          sender: string
+          status: string
+          subject: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          accrual_entry_id?: string | null
+          amount_detected?: number | null
+          attachment_name?: string | null
+          created_at?: string
+          id?: string
+          ledger_entry_id?: string | null
+          raw_json?: Json | null
+          received_at?: string
+          sender?: string
+          status?: string
+          subject?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          accrual_entry_id?: string | null
+          amount_detected?: number | null
+          attachment_name?: string | null
+          created_at?: string
+          id?: string
+          ledger_entry_id?: string | null
+          raw_json?: Json | null
+          received_at?: string
+          sender?: string
+          status?: string
+          subject?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "siphoned_invoices_accrual_entry_id_fkey"
+            columns: ["accrual_entry_id"]
+            isOneToOne: false
+            referencedRelation: "committed_accruals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "siphoned_invoices_ledger_entry_id_fkey"
             columns: ["ledger_entry_id"]
             isOneToOne: false
             referencedRelation: "financial_ledger"
