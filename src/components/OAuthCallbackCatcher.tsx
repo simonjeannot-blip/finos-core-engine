@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { useSiphonStatus } from "@/hooks/useSiphonStatus";
+import { useDiscoveryScan } from "@/hooks/useDiscoveryScan";
 import { supabase } from "@/integrations/supabase/client";
 
 /**
@@ -18,8 +19,10 @@ export function OAuthCallbackCatcher() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
   const { exchangeTokens, exchanging, refresh } = useSiphonStatus();
+  const { triggerDiscovery, scanning: discoveryScanning } = useDiscoveryScan();
   const handledRef = useRef(false);
   const [waitingForSession, setWaitingForSession] = useState(false);
+  const [forensicPhase, setForensicPhase] = useState<string | null>(null);
 
   useEffect(() => {
     const code = searchParams.get("code");
@@ -113,8 +116,30 @@ export function OAuthCallbackCatcher() {
         if (result.success) {
           toast({
             title: "Siphon Connected",
-            description: "Master Inbox handshake complete via frontend bridge. The Ghost is now siphoning.",
+            description: "Master Inbox handshake complete. Initiating Q1 Forensic Strike…",
           });
+
+          // ═══════════════════════════════════════════════════════
+          // Q1 FORENSIC STRIKE — Auto-trigger on Dojo Green
+          // 30-day Discovery Scan → Extract supplier invoices
+          // ═══════════════════════════════════════════════════════
+          setForensicPhase("DISCOVERY");
+          try {
+            console.log("[Siphon] 🎯 Q1 Forensic Strike initiated — running Discovery Scan...");
+            const discoveryResult = await triggerDiscovery();
+            if (discoveryResult) {
+              const { total_pdfs_found, summary } = discoveryResult;
+              console.log(`[Siphon] ✅ Discovery complete: ${total_pdfs_found} PDFs found`);
+              toast({
+                title: "Discovery Scan Complete",
+                description: `Found ${total_pdfs_found} PDFs — ${summary.high_confidence} HIGH, ${summary.medium_confidence} MEDIUM confidence invoices detected.`,
+              });
+            }
+          } catch (err) {
+            console.error("[Siphon] ⚠️ Q1 Discovery scan error:", err);
+          } finally {
+            setForensicPhase(null);
+          }
         } else {
           toast({
             title: "Siphon Connection Failed",
@@ -157,6 +182,17 @@ export function OAuthCallbackCatcher() {
         <div className="h-4 w-4 rounded-full bg-siphon-connected animate-pulse" />
         <div className="text-sm font-mono text-siphon-connected">
           EXCHANGING TOKENS — Finalizing Ghost Siphon handshake…
+        </div>
+      </div>
+    );
+  }
+
+  if (forensicPhase) {
+    return (
+      <div className="rounded-md border border-siphon-scoping/30 bg-siphon-scoping/5 p-4 flex items-center gap-3">
+        <div className="h-4 w-4 rounded-full bg-siphon-scoping animate-pulse" />
+        <div className="text-sm font-mono text-siphon-scoping">
+          Q1 FORENSIC STRIKE — Running 30-day Deep Discovery Scan…
         </div>
       </div>
     );
