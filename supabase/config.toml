@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.ghost-siphon-scan]
 verify_jwt = false
+
+[functions.ghost-discovery-scan]
+verify_jwt = false

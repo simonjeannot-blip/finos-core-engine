@@ -20,8 +20,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowLeft, Shield, Users, Settings, Mail } from "lucide-react";
+import { ArrowLeft, Shield, Users, Settings } from "lucide-react";
 import { SiphonControl } from "@/components/SiphonControl";
+import { DiscoveryView } from "@/components/DiscoveryView";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile, UserRole } from "@/hooks/useProfile";
@@ -220,6 +221,9 @@ export default function UserManagement() {
 
         {/* Ghost Siphon — Inbox Control */}
         <SiphonControl />
+
+        {/* Ghost Siphon — Deep Discovery Scanner */}
+        <DiscoveryView />
 
         {/* Users Card */}
         <Card>
