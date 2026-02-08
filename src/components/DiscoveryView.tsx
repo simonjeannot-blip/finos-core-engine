@@ -19,6 +19,8 @@ import {
   Building2,
   ArrowUpDown,
   X,
+  Zap,
+  Skull,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -27,6 +29,7 @@ import {
   type SupplierProfile,
   type NewSupplierAlert,
 } from "@/hooks/useDiscoveryScan";
+import { useGhostProcessor, type ProcessorResult } from "@/hooks/useGhostProcessor";
 import { useToast } from "@/hooks/use-toast";
 
 type SortKey = "confidence" | "received_at" | "sender_name" | "filename";
@@ -88,8 +91,37 @@ function formatDate(dateStr: string): string {
   });
 }
 
+function ExtractionResultBadge({ result }: { result: ProcessorResult }) {
+  if (result.flagged) {
+    return (
+      <div className="flex flex-col items-end gap-0.5">
+        <Badge className="bg-siphon-scanning/15 text-siphon-scanning border-siphon-scanning/30 font-mono text-[10px]">
+          <Skull className="mr-1 h-3 w-3" />
+          FLAGGED
+        </Badge>
+        <span className="text-[9px] font-mono text-siphon-charcoal-muted">
+          {result.extraction.confidence_percent}% conf
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-0.5">
+      <Badge className="bg-siphon-connected/15 text-siphon-connected border-siphon-connected/30 font-mono text-[10px]">
+        <CheckCircle2 className="mr-1 h-3 w-3" />
+        £{result.amount_detected.toFixed(2)}
+      </Badge>
+      <span className="text-[9px] font-mono text-siphon-charcoal-muted">
+        {result.extraction.supplier_name || "—"} · {result.extraction.confidence_percent}%
+      </span>
+    </div>
+  );
+}
+
 export function DiscoveryView() {
   const { scanning, result, error, triggerDiscovery, clearResults } = useDiscoveryScan();
+  const { processInvoice, isProcessing, getResult, getError, processingCount } = useGhostProcessor();
   const { toast } = useToast();
   const [filter, setFilter] = useState<FilterConfidence>("ALL");
   const [sortKey, setSortKey] = useState<SortKey>("confidence");
@@ -104,6 +136,41 @@ export function DiscoveryView() {
       });
     } else if (error) {
       toast({ title: "Discovery Failed", description: error, variant: "destructive" });
+    }
+  };
+
+  const handleProcess = async (d: DiscoveredInvoice) => {
+    // Extract attachment_id from the message_id context
+    // Discovery scan stores message_id as the Graph message ID
+    // We need to construct the dedup pattern
+    const res = await processInvoice({
+      message_id: d.message_id,
+      attachment_id: d.message_id, // The discovery scan uses message_id for the attachment context
+      sender: d.sender_address,
+      subject: d.subject,
+      filename: d.filename,
+    });
+
+    if (res) {
+      if (res.flagged) {
+        toast({
+          title: "⚠️ Flagged for Human Audit",
+          description: `Confidence: ${res.extraction.confidence_percent}%. ${res.extraction.extraction_notes}`,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "✅ Extraction Complete",
+          description: `£${res.amount_detected.toFixed(2)} from ${res.extraction.supplier_name || d.sender_name} → Committed to $A$`,
+        });
+      }
+    } else {
+      const errMsg = getError(`${d.message_id}::${d.message_id}`);
+      toast({
+        title: "Extraction Failed",
+        description: errMsg || "Unknown error",
+        variant: "destructive",
+      });
     }
   };
 
@@ -150,6 +217,8 @@ export function DiscoveryView() {
 
   const filteredItems = getFilteredAndSorted();
 
+  const getDedupKey = (d: DiscoveredInvoice) => `${d.message_id}::${d.message_id}`;
+
   return (
     <Card className="bg-siphon-charcoal border-siphon-charcoal-border">
       <CardHeader>
@@ -161,6 +230,11 @@ export function DiscoveryView() {
             </CardTitle>
             <CardDescription className="text-siphon-charcoal-muted">
               30-day forensic inbox audit — Supplier Intelligence Layer
+              {processingCount > 0 && (
+                <span className="ml-2 text-siphon-connected animate-pulse">
+                  · {processingCount} extraction(s) active
+                </span>
+              )}
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
@@ -351,57 +425,97 @@ export function DiscoveryView() {
                   <TableHead className="text-siphon-charcoal-muted font-mono text-[10px]">
                     STATUS
                   </TableHead>
+                  <TableHead className="text-siphon-charcoal-muted font-mono text-[10px]">
+                    EXTRACT
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredItems.map((d, i) => (
-                  <TableRow
-                    key={`${d.message_id}-${i}`}
-                    className="border-siphon-charcoal-border hover:bg-siphon-charcoal-deep/50"
-                  >
-                    <TableCell>
-                      <ConfidenceBadge score={d.confidence} />
-                    </TableCell>
-                    <TableCell className="text-xs font-mono text-siphon-charcoal-foreground">
-                      <div className="max-w-[140px] truncate" title={d.sender_address}>
-                        {d.sender_name}
-                      </div>
-                      <div className="text-[10px] text-siphon-charcoal-muted truncate max-w-[140px]">
-                        @{d.sender_domain}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-xs font-mono text-siphon-charcoal-foreground max-w-[180px] truncate" title={d.subject}>
-                      {d.subject}
-                    </TableCell>
-                    <TableCell className="text-xs font-mono text-siphon-charcoal-foreground">
-                      <div className="flex items-center gap-1 max-w-[150px]">
-                        <FileText className="h-3 w-3 text-siphon-charcoal-muted flex-shrink-0" />
-                        <span className="truncate" title={d.filename}>{d.filename}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-[10px] font-mono text-siphon-charcoal-muted">
-                      {formatFileSize(d.file_size)}
-                    </TableCell>
-                    <TableCell className="text-[10px] font-mono text-siphon-charcoal-muted whitespace-nowrap">
-                      {formatDate(d.received_at)}
-                    </TableCell>
-                    <TableCell>
-                      {d.is_already_siphoned ? (
-                        <Badge className="bg-siphon-connected/10 text-siphon-connected border-siphon-connected/20 font-mono text-[10px]">
-                          SIPHONED
-                        </Badge>
-                      ) : d.is_known_supplier ? (
-                        <Badge className="bg-primary/10 text-primary border-primary/20 font-mono text-[10px]">
-                          KNOWN
-                        </Badge>
-                      ) : (
-                        <Badge className="bg-siphon-scanning/10 text-siphon-scanning border-siphon-scanning/20 font-mono text-[10px]">
-                          NEW
-                        </Badge>
+                {filteredItems.map((d, i) => {
+                  const dedupKey = getDedupKey(d);
+                  const processing = isProcessing(dedupKey);
+                  const procResult = getResult(dedupKey);
+                  const procError = getError(dedupKey);
+
+                  return (
+                    <TableRow
+                      key={`${d.message_id}-${i}`}
+                      className={cn(
+                        "border-siphon-charcoal-border hover:bg-siphon-charcoal-deep/50 transition-all duration-300",
+                        processing && "bg-siphon-connected/5 animate-pulse"
                       )}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                    >
+                      <TableCell>
+                        <ConfidenceBadge score={d.confidence} />
+                      </TableCell>
+                      <TableCell className="text-xs font-mono text-siphon-charcoal-foreground">
+                        <div className="max-w-[140px] truncate" title={d.sender_address}>
+                          {d.sender_name}
+                        </div>
+                        <div className="text-[10px] text-siphon-charcoal-muted truncate max-w-[140px]">
+                          @{d.sender_domain}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-xs font-mono text-siphon-charcoal-foreground max-w-[180px] truncate" title={d.subject}>
+                        {d.subject}
+                      </TableCell>
+                      <TableCell className="text-xs font-mono text-siphon-charcoal-foreground">
+                        <div className="flex items-center gap-1 max-w-[150px]">
+                          <FileText className="h-3 w-3 text-siphon-charcoal-muted flex-shrink-0" />
+                          <span className="truncate" title={d.filename}>{d.filename}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-[10px] font-mono text-siphon-charcoal-muted">
+                        {formatFileSize(d.file_size)}
+                      </TableCell>
+                      <TableCell className="text-[10px] font-mono text-siphon-charcoal-muted whitespace-nowrap">
+                        {formatDate(d.received_at)}
+                      </TableCell>
+                      <TableCell>
+                        {d.is_already_siphoned ? (
+                          <Badge className="bg-siphon-connected/10 text-siphon-connected border-siphon-connected/20 font-mono text-[10px]">
+                            SIPHONED
+                          </Badge>
+                        ) : d.is_known_supplier ? (
+                          <Badge className="bg-primary/10 text-primary border-primary/20 font-mono text-[10px]">
+                            KNOWN
+                          </Badge>
+                        ) : (
+                          <Badge className="bg-siphon-scanning/10 text-siphon-scanning border-siphon-scanning/20 font-mono text-[10px]">
+                            NEW
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {procResult ? (
+                          <ExtractionResultBadge result={procResult} />
+                        ) : procError ? (
+                          <Badge className="bg-destructive/10 text-destructive border-destructive/20 font-mono text-[10px]">
+                            ERROR
+                          </Badge>
+                        ) : processing ? (
+                          <div className="flex items-center gap-1">
+                            <Loader2 className="h-3 w-3 animate-spin text-siphon-connected" />
+                            <span className="text-[10px] font-mono text-siphon-connected">
+                              EXTRACTING…
+                            </span>
+                          </div>
+                        ) : (
+                          <Button
+                            onClick={() => handleProcess(d)}
+                            disabled={d.is_already_siphoned}
+                            size="sm"
+                            className="h-6 px-2 bg-siphon-connected/15 hover:bg-siphon-connected/25 text-siphon-connected border border-siphon-connected/30 font-mono text-[10px] uppercase tracking-wider"
+                            variant="outline"
+                          >
+                            <Zap className="mr-1 h-3 w-3" />
+                            Process
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
@@ -428,7 +542,7 @@ export function DiscoveryView() {
 
         {/* Footer */}
         <div className="text-[10px] text-siphon-charcoal-muted font-mono">
-          PROTOCOL: Deep Discovery Scan · WINDOW: 30 Days · ENGINE: Confidence Classifier v1.0
+          PROTOCOL: Deep Discovery Scan · WINDOW: 30 Days · ENGINE: Confidence Classifier v1.0 + Ghost Processor v1.0
         </div>
       </CardContent>
     </Card>
