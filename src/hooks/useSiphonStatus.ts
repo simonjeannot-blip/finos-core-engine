@@ -82,8 +82,15 @@ export function useSiphonStatus() {
   const initiateConnection = useCallback(async () => {
     if (!user) return;
 
+    // ═══════════════════════════════════════════════════
+    // STATE CLEAR — Reset internal state before new URL gen
+    // ═══════════════════════════════════════════════════
+    setStatus(prev => ({ ...prev, loading: true }));
+    setExchanging(false);
+
     try {
-      // IMMUTABLE: Hard-coded redirect URI — no window.location inference
+      console.log("[Siphon] 🔗 Requesting fresh auth URL (v3.4.1 — /common/ endpoint)...");
+
       const { data, error } = await supabase.functions.invoke("microsoft-callback", {
         method: "POST",
         body: {},
@@ -91,16 +98,22 @@ export function useSiphonStatus() {
 
       if (error) {
         console.error("[Siphon] Failed to get auth URL:", error);
+        setStatus(prev => ({ ...prev, loading: false }));
         return;
       }
 
       if (data?.auth_url) {
-        console.log("[Siphon] Redirecting to Microsoft OAuth...");
-        console.log("[Siphon] Redirect URI registered:", data.redirect_uri);
+        console.log("[Siphon] ✅ Auth URL generated (version:", data._version, ")");
+        console.log("[Siphon] Redirect URI:", data.redirect_uri);
+        console.log("[Siphon] Full URL:", data.auth_url);
         window.location.href = data.auth_url;
+      } else {
+        console.error("[Siphon] ❌ No auth_url in response:", data);
+        setStatus(prev => ({ ...prev, loading: false }));
       }
     } catch (err) {
       console.error("[Siphon] Connection initiation failed:", err);
+      setStatus(prev => ({ ...prev, loading: false }));
     }
   }, [user]);
 

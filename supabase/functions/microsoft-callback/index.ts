@@ -19,13 +19,15 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const MICROSOFT_TENANT = "common";
-const MICROSOFT_AUTH_URL = `https://login.microsoftonline.com/${MICROSOFT_TENANT}/oauth2/v2.0/authorize`;
-const MICROSOFT_TOKEN_URL = `https://login.microsoftonline.com/${MICROSOFT_TENANT}/oauth2/v2.0/token`;
+// ═══════════════════════════════════════════════════════════════
+// GLOBAL COMMON ENDPOINT — No tenant inference. Multi-tenant only.
+// ═══════════════════════════════════════════════════════════════
+const MICROSOFT_AUTH_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+const MICROSOFT_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const SCOPES = "openid offline_access Mail.Read Mail.ReadBasic";
 
 // Cache-buster version — bump on every deploy
-const VERSION = "v3.4.0";
+const VERSION = "v3.4.1";
 
 // ═══════════════════════════════════════════════════════════════
 // HARD-CODED CLIENT ID — No env inference. Matches Entra exactly.
