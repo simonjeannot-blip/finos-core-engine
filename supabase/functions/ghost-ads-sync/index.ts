@@ -74,7 +74,16 @@ async function fetchAdsCampaignData(
   dateFrom: string,
   dateTo: string
 ): Promise<GoogleAdsCampaignRow[]> {
-  const customerId = Deno.env.get("GOOGLE_ADS_CUSTOMER_ID")!.replace(/-/g, "");
+  // Regex purge: strip ALL non-numeric characters (dashes, spaces, etc.)
+  const rawCustomerId = Deno.env.get("GOOGLE_ADS_CUSTOMER_ID")!;
+  const customerId = rawCustomerId.replace(/\D/g, "");
+
+  if (customerId.length !== 10) {
+    throw new Error(
+      `CUSTOMER_ID_INVALID: Expected 10 digits after purge, got ${customerId.length} ("${rawCustomerId}" → "${customerId}")`
+    );
+  }
+  console.log(`[Ghost] 🆔 Customer ID sanitized: ${customerId.slice(0, 3)}****${customerId.slice(-3)}`);
   const developerToken = Deno.env.get("GOOGLE_ADS_DEVELOPER_TOKEN")!;
 
   const query = `
@@ -283,6 +292,22 @@ Deno.serve(async (req) => {
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    // ═══════════════════════════════════════════════
+    // Pre-flight: Validate Customer ID is 10 digits
+    // ═══════════════════════════════════════════════
+    const rawCid = Deno.env.get("GOOGLE_ADS_CUSTOMER_ID")!;
+    const purgedCid = rawCid.replace(/\D/g, "");
+    if (purgedCid.length !== 10) {
+      const errMsg = `CUSTOMER_ID_INVALID: Expected 10 digits, got ${purgedCid.length} ("${rawCid}" → "${purgedCid}")`;
+      console.error(`[Ghost] ❌ ${errMsg}`);
+      await logEndpointFailure(supabase, errMsg, { phase: "CUSTOMER_ID_VALIDATION" });
+      return new Response(
+        JSON.stringify({ error: "CONFIG_ERROR", message: errMsg }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    console.log(`[Ghost] ✅ Customer ID validated: 10 digits`);
 
     // ═══════════════════════════════════════════════
     // Resolve admin user for RLS-bypassed writes
