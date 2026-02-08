@@ -20,3 +20,6 @@ verify_jwt = false
 
 [functions.ghost-discovery-scan]
 verify_jwt = false
+
+[functions.ghost-processor]
+verify_jwt = false
