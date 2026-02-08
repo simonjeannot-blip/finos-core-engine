@@ -21,6 +21,8 @@ import {
   X,
   Zap,
   Skull,
+  Activity,
+  Database,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -120,7 +122,7 @@ function ExtractionResultBadge({ result }: { result: ProcessorResult }) {
 }
 
 export function DiscoveryView() {
-  const { scanning, result, error, triggerDiscovery, clearResults } = useDiscoveryScan();
+  const { scanning, result, error, polledCount, diagnosticTimeout, triggerDiscovery, clearResults } = useDiscoveryScan();
   const { processInvoice, isProcessing, getResult, getError, processingCount } = useGhostProcessor();
   const { toast } = useToast();
   const [filter, setFilter] = useState<FilterConfidence>("ALL");
@@ -140,12 +142,9 @@ export function DiscoveryView() {
   };
 
   const handleProcess = async (d: DiscoveredInvoice) => {
-    // Extract attachment_id from the message_id context
-    // Discovery scan stores message_id as the Graph message ID
-    // We need to construct the dedup pattern
     const res = await processInvoice({
       message_id: d.message_id,
-      attachment_id: d.message_id, // The discovery scan uses message_id for the attachment context
+      attachment_id: d.message_id,
       sender: d.sender_address,
       subject: d.subject,
       filename: d.filename,
@@ -227,6 +226,7 @@ export function DiscoveryView() {
             <CardTitle className="flex items-center gap-2 text-siphon-charcoal-foreground">
               <Search className="h-5 w-5 text-siphon-scanning" />
               Deep Discovery Scanner
+              <span className="text-[10px] font-mono text-siphon-charcoal-muted ml-1">v4.1.0</span>
             </CardTitle>
             <CardDescription className="text-siphon-charcoal-muted">
               30-day forensic inbox audit — Supplier Intelligence Layer
@@ -266,6 +266,44 @@ export function DiscoveryView() {
       </CardHeader>
 
       <CardContent className="space-y-4">
+        {/* Live Polling Status — only during active scan */}
+        {scanning && (
+          <div className="rounded-md border border-siphon-scanning/30 bg-siphon-scanning/5 p-3">
+            <div className="flex items-center gap-2 text-xs font-mono text-siphon-scanning">
+              <Activity className="h-4 w-4 animate-pulse" />
+              <span className="font-bold">LIVE SCAN IN PROGRESS</span>
+              {polledCount !== null && polledCount > 0 && (
+                <Badge className="bg-siphon-connected/15 text-siphon-connected border-siphon-connected/30 font-mono text-[10px] ml-2">
+                  <Database className="mr-1 h-3 w-3" />
+                  {polledCount} discoveries persisted
+                </Badge>
+              )}
+            </div>
+            {diagnosticTimeout && (
+              <div className="mt-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs font-mono text-destructive">
+                <AlertTriangle className="inline-block mr-1 h-3 w-3" />
+                DIAGNOSTIC: No PDFs found after 30 seconds. Possible causes:
+                <ul className="mt-1 ml-4 list-disc text-[10px] text-destructive/80">
+                  <li>No emails with PDF attachments in the last 30 days</li>
+                  <li>All PDF senders are on the consumer domain blocklist (Gmail, Yahoo, etc.)</li>
+                  <li>Microsoft Graph API returned 0 messages with hasAttachments=true</li>
+                  <li>Token may have insufficient scopes — check edge function logs</li>
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Raw Log Summary Strip — shows attachment forensics */}
+        {result?.raw_log && (
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <SummaryCell label="ATTACHMENTS SEEN" value={result.raw_log.total_attachments_seen} />
+            <SummaryCell label="PDFs ACCEPTED" value={result.raw_log.pdfs_accepted} className="text-siphon-connected" />
+            <SummaryCell label="NON-PDF REJECTED" value={result.raw_log.non_pdfs_rejected} className="text-siphon-charcoal-muted" />
+            <SummaryCell label="CONSUMER SKIPPED" value={result.raw_log.consumer_domain_skipped} className="text-siphon-scanning" />
+          </div>
+        )}
+
         {/* Summary Strip */}
         {result && (
           <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -521,6 +559,22 @@ export function DiscoveryView() {
           </div>
         )}
 
+        {/* Zero results after scan */}
+        {result && result.total_pdfs_found === 0 && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-center">
+            <AlertTriangle className="mx-auto h-8 w-8 text-destructive/60 mb-2" />
+            <p className="text-sm font-mono text-destructive font-bold">DIAGNOSTIC: No PDFs Found</p>
+            <p className="text-[10px] font-mono text-destructive/70 mt-1">
+              {result.messages_scanned} messages scanned across 30 days. Zero qualifying PDF attachments detected.
+            </p>
+            {result.raw_log && (
+              <div className="mt-2 text-[10px] font-mono text-siphon-charcoal-muted">
+                Raw: {result.raw_log.total_attachments_seen} attachments seen · {result.raw_log.non_pdfs_rejected} non-PDF · {result.raw_log.consumer_domain_skipped} consumer domain
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Empty state */}
         {!result && !scanning && (
           <div className="text-center py-8 text-siphon-charcoal-muted font-mono text-sm">
@@ -542,7 +596,7 @@ export function DiscoveryView() {
 
         {/* Footer */}
         <div className="text-[10px] text-siphon-charcoal-muted font-mono">
-          PROTOCOL: Deep Discovery Scan · WINDOW: 30 Days · ENGINE: Confidence Classifier v1.0 + Ghost Processor v1.0
+          PROTOCOL: Deep Discovery Scan v4.1.0 · WINDOW: 30 Days · ENGINE: Widened Confidence Classifier + Ghost Processor v1.0 · DB: discovered_invoices
         </div>
       </CardContent>
     </Card>
