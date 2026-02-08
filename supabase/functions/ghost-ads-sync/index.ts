@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // ═══════════════════════════════════════════════════════════════
-// THE GHOST — Autonomous Google Ads Ingestion Engine v1.0
+// THE GHOST — Autonomous Google Ads Ingestion Engine v1.1
 //
 // ARCHITECTURE: Fetch → Filter → Inject → Audit
 // 1. OAuth2 token refresh via Google's token endpoint
