@@ -23,6 +23,7 @@ import {
 import { ArrowLeft, Shield, Users, Settings } from "lucide-react";
 import { SiphonControl } from "@/components/SiphonControl";
 import { DiscoveryView } from "@/components/DiscoveryView";
+import { OAuthCallbackCatcher } from "@/components/OAuthCallbackCatcher";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile, UserRole } from "@/hooks/useProfile";
@@ -191,6 +192,9 @@ export default function UserManagement() {
       </header>
 
       <main className="container mx-auto px-4 py-6 space-y-6">
+        {/* OAuth Callback Catcher — intercepts Microsoft redirects */}
+        <OAuthCallbackCatcher />
+
         {/* Settings Card */}
         <Card>
           <CardHeader>

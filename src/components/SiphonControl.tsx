@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,36 +12,11 @@ export function SiphonControl() {
   const { state, expiresAt, updatedAt, tenantId, loading, initiateConnection, refresh } = useSiphonStatus();
   const { scanning, lastScan, lastScanTime, error: scanError, todayCount, todayCountLoading, triggerScan, fetchTodayCount } = useSiphonScanner();
   const { toast } = useToast();
-  const [searchParams, setSearchParams] = useSearchParams();
 
   // Load today's count on mount
   useEffect(() => {
     fetchTodayCount();
   }, [fetchTodayCount]);
-
-  // Handle OAuth callback redirects
-  useEffect(() => {
-    const siphonResult = searchParams.get("siphon");
-    if (siphonResult === "connected") {
-      toast({
-        title: "Siphon Connected",
-        description: "Master Inbox handshake complete. The Ghost is now siphoning.",
-      });
-      refresh();
-      searchParams.delete("siphon");
-      setSearchParams(searchParams, { replace: true });
-    } else if (siphonResult === "error") {
-      const reason = searchParams.get("reason") || "Unknown error";
-      toast({
-        title: "Siphon Connection Failed",
-        description: `OAuth handshake failed: ${reason}`,
-        variant: "destructive",
-      });
-      searchParams.delete("siphon");
-      searchParams.delete("reason");
-      setSearchParams(searchParams, { replace: true });
-    }
-  }, [searchParams, setSearchParams, toast, refresh]);
 
   const handleScan = async () => {
     const result = await triggerScan();
