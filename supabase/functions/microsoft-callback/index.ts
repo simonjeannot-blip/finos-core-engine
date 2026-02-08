@@ -23,10 +23,12 @@ const MICROSOFT_AUTH_URL = `https://login.microsoftonline.com/${MICROSOFT_TENANT
 const MICROSOFT_TOKEN_URL = `https://login.microsoftonline.com/${MICROSOFT_TENANT}/oauth2/v2.0/token`;
 const SCOPES = "openid offline_access Mail.Read Mail.ReadBasic";
 
-// Redirect URI = this function's own URL
+// Deployment version — bump on every deploy to verify cache busting
+const VERSION = "v2.0.1";
+
+// Redirect URI — HARDCODED to prevent SUPABASE_URL trailing-slash / casing issues
 function getRedirectUri(): string {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  return `${supabaseUrl}/functions/v1/microsoft-callback`;
+  return "https://rwslsvvotzwbrfqxtyky.supabase.co/functions/v1/microsoft-callback";
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -273,7 +275,7 @@ Deno.serve(async (req) => {
       console.log(`[Siphon] 🔗 Redirect URI: ${redirectUri}`);
 
       return new Response(
-        JSON.stringify({ auth_url: authorizationUrl.toString() }),
+        JSON.stringify({ auth_url: authorizationUrl.toString(), _version: VERSION }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     } catch (error) {
