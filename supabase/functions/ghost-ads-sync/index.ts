@@ -86,6 +86,21 @@ async function fetchAdsCampaignData(
   console.log(`[Ghost] 🆔 Customer ID sanitized: ${customerId.slice(0, 3)}****${customerId.slice(-3)}`);
   const developerToken = Deno.env.get("GOOGLE_ADS_DEVELOPER_TOKEN")!;
 
+  // ═══════════════════════════════════════════════
+  // MCC Manager Header — Proves manager-level authority
+  // ═══════════════════════════════════════════════
+  const rawLoginCid = Deno.env.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID");
+  if (!rawLoginCid) {
+    throw new Error("CONFIG_ERROR: GOOGLE_ADS_LOGIN_CUSTOMER_ID is missing. Manager authority cannot be proven.");
+  }
+  const loginCustomerId = rawLoginCid.replace(/\D/g, "");
+  if (loginCustomerId.length !== 10) {
+    throw new Error(
+      `CONFIG_ERROR: LOGIN_CUSTOMER_ID must be 10 digits after purge, got ${loginCustomerId.length} ("${rawLoginCid}" → "${loginCustomerId}")`
+    );
+  }
+  console.log(`[Ghost] 🏢 MCC Manager ID sanitized: ${loginCustomerId.slice(0, 3)}****${loginCustomerId.slice(-3)}`);
+
   const query = `
     SELECT
       campaign.name,
@@ -100,15 +115,16 @@ async function fetchAdsCampaignData(
     ORDER BY segments.date DESC
   `;
 
-  console.log(`[Ghost] 📡 Querying Google Ads API for ${dateFrom} → ${dateTo}`);
+  console.log(`[Ghost] 📡 Querying Google Ads API v19 for ${dateFrom} → ${dateTo}`);
 
   const response = await fetch(
-    `https://googleads.googleapis.com/v18/customers/${customerId}/googleAds:searchStream`,
+    `https://googleads.googleapis.com/v19/customers/${customerId}/googleAds:searchStream`,
     {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${accessToken}`,
         "developer-token": developerToken,
+        "login-customer-id": loginCustomerId,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ query }),
@@ -280,6 +296,7 @@ Deno.serve(async (req) => {
       "GOOGLE_ADS_CLIENT_SECRET",
       "GOOGLE_ADS_REFRESH_TOKEN",
       "GOOGLE_ADS_CUSTOMER_ID",
+      "GOOGLE_ADS_LOGIN_CUSTOMER_ID",
     ];
 
     const missingSecrets = requiredSecrets.filter((s) => !Deno.env.get(s));
