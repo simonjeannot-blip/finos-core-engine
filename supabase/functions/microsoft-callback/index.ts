@@ -27,12 +27,12 @@ const MICROSOFT_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.
 const SCOPES = "openid offline_access Mail.Read Mail.ReadBasic";
 
 // Cache-buster version — bump on every deploy
-const VERSION = "v3.4.1";
+const VERSION = "v4.0.0";
 
 // ═══════════════════════════════════════════════════════════════
-// HARD-CODED CLIENT ID — No env inference. Matches Entra exactly.
+// HARD-CODED CLIENT ID — Clean-room registration. v4.0.0 transplant.
 // ═══════════════════════════════════════════════════════════════
-const IMMUTABLE_CLIENT_ID = "49c190ce-e766-4669-a786-232e93ecd152";
+const IMMUTABLE_CLIENT_ID = "9878609b-2022-47dc-bfef-0611cf133dbc";
 
 // ═══════════════════════════════════════════════════════════════
 // IMMUTABLE REDIRECT URI — Hard-coded. No inference. No guesswork.
