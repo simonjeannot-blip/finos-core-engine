@@ -25,7 +25,12 @@ const MICROSOFT_TOKEN_URL = `https://login.microsoftonline.com/${MICROSOFT_TENAN
 const SCOPES = "openid offline_access Mail.Read Mail.ReadBasic";
 
 // Cache-buster version — bump on every deploy
-const VERSION = "v3.2.0";
+const VERSION = "v3.3.0";
+
+// ═══════════════════════════════════════════════════════════════
+// HARD-CODED CLIENT ID — No env inference. Matches Entra exactly.
+// ═══════════════════════════════════════════════════════════════
+const IMMUTABLE_CLIENT_ID = "49c190ce-e766-4669-a786-232e93ecd152";
 
 // ═══════════════════════════════════════════════════════════════
 // IMMUTABLE REDIRECT URI — Hard-coded. No inference. No guesswork.
@@ -77,8 +82,17 @@ function decodeJwtPayload(jwt: string): Record<string, unknown> {
 }
 
 async function exchangeCodeForTokens(code: string): Promise<TokenResponse> {
-  const clientId = Deno.env.get("MICROSOFT_CLIENT_ID")!;
-  const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET")!;
+  const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET") || "";
+
+  // ═══════════════════════════════════════════════════════════
+  // FORENSIC AUDIT — One-time diagnostic for Ghost Key integrity
+  // If length ~36 → you used the Secret ID (WRONG)
+  // If length ~40 and starts with expected prefix → Secret Value (CORRECT)
+  // ═══════════════════════════════════════════════════════════
+  console.log(`[Audit] Secret Length: ${clientSecret.length}`);
+  console.log(`[Audit] Secret Prefix: ${clientSecret.substring(0, 3)}`);
+  console.log(`[Audit] Client ID: ${IMMUTABLE_CLIENT_ID}`);
+  console.log(`[Audit] Redirect URI: ${IMMUTABLE_REDIRECT_URI}`);
 
   console.log(`[Siphon v${VERSION}] 🔑 Exchanging code for tokens...`);
   console.log(`[Siphon v${VERSION}] [Handshake] Trading code using URI: ${IMMUTABLE_REDIRECT_URI}`);
@@ -87,7 +101,7 @@ async function exchangeCodeForTokens(code: string): Promise<TokenResponse> {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: clientId,
+      client_id: IMMUTABLE_CLIENT_ID,
       client_secret: clientSecret,
       code,
       redirect_uri: IMMUTABLE_REDIRECT_URI,
@@ -311,18 +325,10 @@ Deno.serve(async (req) => {
   console.log(`[Siphon v${VERSION}] 🔗 AUTH URL mode — generating OAuth URL`);
 
   try {
-    const clientId = Deno.env.get("MICROSOFT_CLIENT_ID");
-    if (!clientId) {
-      return new Response(
-        JSON.stringify({ error: "CONFIG_ERROR", message: "MICROSOFT_CLIENT_ID not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
     const stateParam = encodeState(user.id, IMMUTABLE_REDIRECT_URI);
 
     const authorizationUrl = new URL(MICROSOFT_AUTH_URL);
-    authorizationUrl.searchParams.set("client_id", clientId);
+    authorizationUrl.searchParams.set("client_id", IMMUTABLE_CLIENT_ID);
     authorizationUrl.searchParams.set("response_type", "code");
     authorizationUrl.searchParams.set("redirect_uri", IMMUTABLE_REDIRECT_URI);
     authorizationUrl.searchParams.set("scope", SCOPES);
