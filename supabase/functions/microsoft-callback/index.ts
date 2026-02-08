@@ -25,19 +25,13 @@ const MICROSOFT_TOKEN_URL = `https://login.microsoftonline.com/${MICROSOFT_TENAN
 const SCOPES = "openid offline_access Mail.Read Mail.ReadBasic";
 
 // Cache-buster version — bump on every deploy
-const VERSION = "v3.0.0";
+const VERSION = "v3.2.0";
 
 // ═══════════════════════════════════════════════════════════════
-// REDIRECT URI — Points to the FRONTEND admin page
-// Microsoft will redirect the user's browser here after consent.
-// The frontend then forwards code+state to this function via POST.
+// IMMUTABLE REDIRECT URI — Hard-coded. No inference. No guesswork.
+// Must match EXACTLY what is registered in Microsoft Entra Portal.
 // ═══════════════════════════════════════════════════════════════
-function buildRedirectUri(appUrl: string): string {
-  // appUrl = the frontend origin (e.g. https://finos-core-engine.lovable.app)
-  // Redirect lands on /admin which has the OAuth catcher logic
-  const base = appUrl.replace(/\/+$/, "");
-  return `${base}/admin`;
-}
+const IMMUTABLE_REDIRECT_URI = "https://finos-core-engine.lovable.app/admin";
 
 // ═══════════════════════════════════════════════════════════════
 // STATE ENCODING — Carries user_id + app_url through OAuth flow
@@ -82,12 +76,12 @@ function decodeJwtPayload(jwt: string): Record<string, unknown> {
   return JSON.parse(json);
 }
 
-async function exchangeCodeForTokens(code: string, redirectUri: string): Promise<TokenResponse> {
+async function exchangeCodeForTokens(code: string): Promise<TokenResponse> {
   const clientId = Deno.env.get("MICROSOFT_CLIENT_ID")!;
   const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET")!;
 
   console.log(`[Siphon v${VERSION}] 🔑 Exchanging code for tokens...`);
-  console.log(`[Siphon v${VERSION}] 🔗 redirect_uri used for exchange: ${redirectUri}`);
+  console.log(`[Siphon v${VERSION}] [Handshake] Trading code using URI: ${IMMUTABLE_REDIRECT_URI}`);
 
   const response = await fetch(MICROSOFT_TOKEN_URL, {
     method: "POST",
@@ -96,7 +90,7 @@ async function exchangeCodeForTokens(code: string, redirectUri: string): Promise
       client_id: clientId,
       client_secret: clientSecret,
       code,
-      redirect_uri: redirectUri,
+      redirect_uri: IMMUTABLE_REDIRECT_URI,
       grant_type: "authorization_code",
       scope: SCOPES,
     }),
@@ -253,7 +247,7 @@ Deno.serve(async (req) => {
     body = {};
   }
 
-  const { code, state, app_url } = body;
+  const { code, state } = body;
 
   // ═════════════════════════════════════════════════════════
   // MODE A: TOKEN EXCHANGE — Frontend sends code + state
@@ -275,12 +269,9 @@ Deno.serve(async (req) => {
       }
 
       console.log(`[Siphon v${VERSION}] 🔍 Processing token exchange for user ${user.id.slice(0, 8)}...`);
+      console.log(`[Siphon v${VERSION}] [Handshake] Trading code using URI: ${IMMUTABLE_REDIRECT_URI}`);
 
-      // The redirect_uri used in the token exchange MUST match the one used in the authorize call
-      const redirectUri = buildRedirectUri(stateAppUrl);
-      console.log(`[Siphon v${VERSION}] 🔗 Reconstructed redirect_uri: ${redirectUri}`);
-
-      const tokens = await exchangeCodeForTokens(code, redirectUri);
+      const tokens = await exchangeCodeForTokens(code);
       const tenantId = await storeTokens(supabase, user.id, tokens);
 
       await logAuditEvent(supabase, "SYNC_SUCCESS", {
@@ -328,33 +319,24 @@ Deno.serve(async (req) => {
       );
     }
 
-    const appUrlValue = app_url || "";
-    if (!appUrlValue) {
-      return new Response(
-        JSON.stringify({ error: "MISSING_APP_URL", message: "app_url is required to build redirect URI" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const redirectUri = buildRedirectUri(appUrlValue);
-    const stateParam = encodeState(user.id, appUrlValue);
+    const stateParam = encodeState(user.id, IMMUTABLE_REDIRECT_URI);
 
     const authorizationUrl = new URL(MICROSOFT_AUTH_URL);
     authorizationUrl.searchParams.set("client_id", clientId);
     authorizationUrl.searchParams.set("response_type", "code");
-    authorizationUrl.searchParams.set("redirect_uri", redirectUri);
+    authorizationUrl.searchParams.set("redirect_uri", IMMUTABLE_REDIRECT_URI);
     authorizationUrl.searchParams.set("scope", SCOPES);
     authorizationUrl.searchParams.set("state", stateParam);
     authorizationUrl.searchParams.set("response_mode", "query");
     authorizationUrl.searchParams.set("prompt", "consent");
 
     console.log(`[Siphon v${VERSION}] ✅ Auth URL generated for user ${user.id.slice(0, 8)}...`);
-    console.log(`[Siphon v${VERSION}] 🔗 Redirect URI: ${redirectUri}`);
+    console.log(`[Siphon v${VERSION}] [Handshake] Auth redirect URI: ${IMMUTABLE_REDIRECT_URI}`);
 
     return new Response(
       JSON.stringify({
         auth_url: authorizationUrl.toString(),
-        redirect_uri: redirectUri,
+        redirect_uri: IMMUTABLE_REDIRECT_URI,
         _version: VERSION,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }

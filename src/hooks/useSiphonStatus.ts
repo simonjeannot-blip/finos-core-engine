@@ -83,9 +83,10 @@ export function useSiphonStatus() {
     if (!user) return;
 
     try {
+      // IMMUTABLE: Hard-coded redirect URI — no window.location inference
       const { data, error } = await supabase.functions.invoke("microsoft-callback", {
         method: "POST",
-        body: { app_url: window.location.origin },
+        body: {},
       });
 
       if (error) {
