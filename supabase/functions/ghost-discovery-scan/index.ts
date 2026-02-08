@@ -114,8 +114,8 @@ async function refreshAccessToken(refreshToken: string): Promise<{
   refresh_token: string;
   expires_in: number;
 }> {
-  // IMMUTABLE — Hard-coded to match Entra registration
-  const clientId = "49c190ce-e766-4669-a786-232e93ecd152";
+  // IMMUTABLE — Hard-coded to match Entra v4.0.0 registration
+  const clientId = "9878609b-2022-47dc-bfef-0611cf133dbc";
   const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET")!;
 
   console.log("[Discovery] 🔄 Refreshing access token...");
