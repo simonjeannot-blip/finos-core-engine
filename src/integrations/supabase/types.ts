@@ -318,6 +318,7 @@ export type Database = {
           id: string
           refresh_token: string
           scopes: string
+          tenant_id: string | null
           updated_at: string
           user_id: string
         }
@@ -328,6 +329,7 @@ export type Database = {
           id?: string
           refresh_token: string
           scopes?: string
+          tenant_id?: string | null
           updated_at?: string
           user_id: string
         }
@@ -338,6 +340,7 @@ export type Database = {
           id?: string
           refresh_token?: string
           scopes?: string
+          tenant_id?: string | null
           updated_at?: string
           user_id?: string
         }

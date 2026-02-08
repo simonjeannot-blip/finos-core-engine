@@ -7,8 +7,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 //   POST → Generate Microsoft OAuth authorization URL
 //   GET  → Exchange authorization code for tokens & store
 //
-// SCOPES: offline_access, Mail.Read, Mail.ReadBasic
-// TENANT: common (multi-tenant)
+// SCOPES: openid, offline_access, Mail.Read, Mail.ReadBasic
+// TENANT: /common/ (multi-tenant — accepts any Azure AD tenant)
 // ═══════════════════════════════════════════════════════════════
 
 const corsHeaders = {
@@ -21,7 +21,7 @@ const corsHeaders = {
 const MICROSOFT_TENANT = "common";
 const MICROSOFT_AUTH_URL = `https://login.microsoftonline.com/${MICROSOFT_TENANT}/oauth2/v2.0/authorize`;
 const MICROSOFT_TOKEN_URL = `https://login.microsoftonline.com/${MICROSOFT_TENANT}/oauth2/v2.0/token`;
-const SCOPES = "offline_access Mail.Read Mail.ReadBasic";
+const SCOPES = "openid offline_access Mail.Read Mail.ReadBasic";
 
 // Redirect URI = this function's own URL
 function getRedirectUri(): string {
@@ -58,6 +58,23 @@ interface TokenResponse {
   expires_in: number;
   token_type: string;
   scope: string;
+  id_token?: string;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// JWT DECODE — Extract claims from ID Token (no verification needed,
+// token was just received over TLS from Microsoft's token endpoint)
+// ═══════════════════════════════════════════════════════════════
+function decodeJwtPayload(jwt: string): Record<string, unknown> {
+  const parts = jwt.split(".");
+  if (parts.length !== 3) {
+    throw new Error("ID_TOKEN_MALFORMED: Expected 3-part JWT");
+  }
+  // Base64url → Base64 → decode
+  const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+  const json = atob(padded);
+  return JSON.parse(json);
 }
 
 async function exchangeCodeForTokens(code: string): Promise<TokenResponse> {
@@ -89,6 +106,16 @@ async function exchangeCodeForTokens(code: string): Promise<TokenResponse> {
 
   const tokenData = JSON.parse(body) as TokenResponse;
   console.log("[Siphon] ✅ Tokens acquired. Expires in:", tokenData.expires_in, "seconds");
+
+  if (tokenData.id_token) {
+    try {
+      const claims = decodeJwtPayload(tokenData.id_token);
+      console.log(`[Siphon] 🏢 Tenant ID (tid): ${claims.tid || "NOT_PRESENT"}`);
+    } catch (e) {
+      console.warn("[Siphon] ⚠️ Could not decode id_token:", e);
+    }
+  }
+
   return tokenData;
 }
 
@@ -99,23 +126,39 @@ async function storeTokens(
   supabase: ReturnType<typeof createClient>,
   userId: string,
   tokens: TokenResponse
-): Promise<void> {
+): Promise<string | null> {
   const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
 
-  console.log(`[Siphon] 💾 Storing tokens for user ${userId.slice(0, 8)}...`);
+  // Extract tenant_id from id_token if present
+  let tenantId: string | null = null;
+  if (tokens.id_token) {
+    try {
+      const claims = decodeJwtPayload(tokens.id_token);
+      tenantId = (claims.tid as string) || null;
+      console.log(`[Siphon] 🏢 Extracted tenant_id: ${tenantId || "NONE"}`);
+    } catch (e) {
+      console.warn("[Siphon] ⚠️ Failed to extract tenant_id from id_token:", e);
+    }
+  }
+
+  console.log(`[Siphon] 💾 Storing tokens for user ${userId.slice(0, 8)}... (tenant: ${tenantId || "unknown"})`);
+
+  const upsertPayload: Record<string, unknown> = {
+    user_id: userId,
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token,
+    expires_at: expiresAt,
+    scopes: tokens.scope || SCOPES,
+  };
+
+  // Only set tenant_id if we extracted one
+  if (tenantId) {
+    upsertPayload.tenant_id = tenantId;
+  }
 
   const { error } = await supabase
     .from("microsoft_oauth_tokens")
-    .upsert(
-      {
-        user_id: userId,
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-        expires_at: expiresAt,
-        scopes: tokens.scope || SCOPES,
-      },
-      { onConflict: "user_id" }
-    );
+    .upsert(upsertPayload, { onConflict: "user_id" });
 
   if (error) {
     console.error("[Siphon] ❌ Token storage failed:", error.message);
@@ -123,6 +166,7 @@ async function storeTokens(
   }
 
   console.log("[Siphon] ✅ Tokens stored successfully");
+  return tenantId;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -301,14 +345,16 @@ Deno.serve(async (req) => {
       // Exchange code for tokens
       const tokens = await exchangeCodeForTokens(code);
 
-      // Store tokens in vault
-      await storeTokens(supabase, userId, tokens);
+      // Store tokens in vault (returns extracted tenant_id)
+      const tenantId = await storeTokens(supabase, userId, tokens);
 
-      // Log success
+      // Log success with tenant context
       await logAuditEvent(supabase, "SYNC_SUCCESS", {
         phase: "OAUTH_TOKEN_EXCHANGE",
         user_id: userId,
+        tenant_id: tenantId || "unknown",
         scopes: tokens.scope,
+        multi_tenant: true,
       });
 
       // Redirect back to app
