@@ -1,27 +1,27 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // ═══════════════════════════════════════════════════════════════
-// GHOST SIPHON — Deep Discovery Scanner v4.1.0
+// GHOST SIPHON — Deep Discovery Scanner v4.2.0
 //
-// v4.1.0 CHANGES:
-//   - Widened keyword net: Invoice, Statement, Bill, Amount Due,
-//     Total, Tax, Order + existing patterns
-//   - Consumer domain blocklist — skip personal Gmails etc.
-//   - Verbose RAW LOG for every attachment (accept or reject)
-//   - Persist discoveries to discovered_invoices table
+// v4.2.0 INDUSTRIAL UPGRADE:
+//   - AUTONOMOUS: Client Credentials flow (no user sign-in)
+//   - APPLICATION PERMISSIONS: /users/{mailbox}/messages
+//   - FIXED Q1 FORENSIC WINDOW: Jan 1 → Feb 9, 2026
+//   - Scope: https://graph.microsoft.com/.default
+//   - Target mailbox via GHOST_TARGET_MAILBOX secret
 //
-// ARCHITECTURE: POST-triggered 30-day inbox forensic scan
-//   1. Refresh access_token using stored refresh_token
-//   2. Query Microsoft Graph for ALL PDF attachments (last 30 days)
+// ARCHITECTURE: POST-triggered forensic inbox scan
+//   1. Acquire app-level token via client_credentials grant
+//   2. Query Microsoft Graph /users/{mailbox}/messages
 //   3. Extract & classify metadata with confidence scoring
 //   4. Cross-reference senders against known ledger vendors
 //   5. Persist to discovered_invoices table
 //   6. Return the full Supplier Intelligence Map
 //
-// SCOPES REQUIRED: Mail.Read, Mail.ReadBasic
+// PERMISSIONS REQUIRED: Mail.Read (Application), User.Read.All (Application)
 // ═══════════════════════════════════════════════════════════════
 
-const VERSION = "v4.1.0";
+const VERSION = "v4.2.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -31,13 +31,16 @@ const corsHeaders = {
 };
 
 const IMMUTABLE_CLIENT_ID = "9878609b-2022-47dc-bfef-0611cf133dbc";
-const MICROSOFT_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const GRAPH_API_BASE = "https://graph.microsoft.com/v1.0";
-const SCOPES = "openid offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadBasic";
+
+// ═══════════════════════════════════════════════════════════════
+// Q1 FORENSIC WINDOW — Fixed extraction range
+// ═══════════════════════════════════════════════════════════════
+const Q1_START = "2026-01-01T00:00:00Z";
+const Q1_END = "2026-02-09T23:59:59Z";
 
 // ═══════════════════════════════════════════════════════════════
 // CONSUMER DOMAIN BLOCKLIST — Skip personal email accounts
-// These are high-volume consumer domains that never send invoices
 // ═══════════════════════════════════════════════════════════════
 const CONSUMER_DOMAINS = new Set([
   "gmail.com", "googlemail.com",
@@ -56,20 +59,12 @@ const CONSUMER_DOMAINS = new Set([
 ]);
 
 // ═══════════════════════════════════════════════════════════════
-// CONFIDENCE SCORING ENGINE — v4.1.0 WIDENED NET
-//
-// HIGH  (Dojo Green):  Contains invoice/bill/statement keywords
-//                      OR amount/tax/total/order keywords
-// MEDIUM (Amber):      PDF from a known supplier domain but
-//                      no keyword match
-// LOW   (Charcoal):    Business-domain PDFs with no keyword match
-//                      (still captured — never discarded)
+// CONFIDENCE SCORING ENGINE — v4.1.0 WIDENED NET (preserved)
 // ═══════════════════════════════════════════════════════════════
 const HIGH_CONFIDENCE_KEYWORDS = [
   "invoice", "bill", "statement", "receipt", "remittance",
   "payment", "purchase order", "po#", "credit note", "debit note",
   "inv-", "inv_", "inv #",
-  // v4.1.0 WIDENED NET
   "amount due", "total", "tax", "order", "vat",
   "balance due", "pay by", "due date", "account statement",
   "pro forma", "proforma", "quotation", "quote",
@@ -85,7 +80,6 @@ function classifyConfidence(
   const filenameLower = filename.toLowerCase();
   const combined = `${subjectLower} ${filenameLower}`;
 
-  // HIGH: keyword match in subject or filename
   for (const kw of HIGH_CONFIDENCE_KEYWORDS) {
     if (combined.includes(kw)) {
       return {
@@ -95,7 +89,6 @@ function classifyConfidence(
     }
   }
 
-  // Filename pattern match (INV-XXXX, Statement_Feb, etc.)
   const invoicePattern = /\b(inv|invoice|bill|stmt|statement|order|quote)[_\-\s]?\d*/i;
   if (invoicePattern.test(filename)) {
     return {
@@ -104,7 +97,6 @@ function classifyConfidence(
     };
   }
 
-  // MEDIUM: known supplier domain
   if (knownSupplierDomains.has(senderDomain)) {
     return {
       score: "MEDIUM",
@@ -112,7 +104,6 @@ function classifyConfidence(
     };
   }
 
-  // LOW: any non-consumer business PDF — STILL CAPTURED
   return {
     score: "LOW",
     reason: "Non-consumer business domain PDF — no keyword match",
@@ -124,18 +115,18 @@ function classifyConfidence(
 // ═══════════════════════════════════════════════════════════════
 function analyzeCadence(dates: string[]): string {
   if (dates.length < 2) return "INSUFFICIENT_DATA";
-  
+
   const sorted = dates
     .map((d) => new Date(d).getTime())
     .sort((a, b) => a - b);
-  
+
   const gaps: number[] = [];
   for (let i = 1; i < sorted.length; i++) {
-    gaps.push((sorted[i] - sorted[i - 1]) / (1000 * 60 * 60 * 24)); // days
+    gaps.push((sorted[i] - sorted[i - 1]) / (1000 * 60 * 60 * 24));
   }
-  
+
   const avgGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
-  
+
   if (avgGap <= 8) return "WEEKLY";
   if (avgGap <= 16) return "BI_WEEKLY";
   if (avgGap <= 35) return "MONTHLY";
@@ -143,47 +134,42 @@ function analyzeCadence(dates: string[]): string {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// TOKEN REFRESH — Silent renewal
+// CLIENT CREDENTIALS TOKEN — Autonomous app-level access
+// No user sign-in. No refresh tokens. Pure machine-to-machine.
 // ═══════════════════════════════════════════════════════════════
-async function refreshAccessToken(refreshToken: string): Promise<{
-  access_token: string;
-  refresh_token: string;
-  expires_in: number;
-}> {
+async function acquireAppToken(tenantId: string): Promise<string> {
   const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET")!;
+  const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
 
-  console.log(`[Discovery ${VERSION}] 🔄 Refreshing access token...`);
+  console.log(`[Discovery ${VERSION}] 🔑 Acquiring app token via client_credentials...`);
+  console.log(`[Discovery ${VERSION}] 🏢 Tenant: ${tenantId}`);
 
-  const response = await fetch(MICROSOFT_TOKEN_URL, {
+  const response = await fetch(tokenUrl, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       client_id: IMMUTABLE_CLIENT_ID,
       client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token",
-      scope: SCOPES,
+      scope: "https://graph.microsoft.com/.default",
+      grant_type: "client_credentials",
     }),
   });
 
   const body = await response.text();
 
   if (!response.ok) {
-    console.error(`[Discovery ${VERSION}] ❌ Token refresh failed:`, body);
-    throw new Error(`TOKEN_REFRESH_FAILED: ${response.status}`);
+    console.error(`[Discovery ${VERSION}] ❌ Client credentials token failed:`, body);
+    throw new Error(`CLIENT_CREDENTIALS_FAILED: ${response.status} — ${body}`);
   }
 
   const data = JSON.parse(body);
-  console.log(`[Discovery ${VERSION}] ✅ Token refreshed.`);
-  return {
-    access_token: data.access_token,
-    refresh_token: data.refresh_token || refreshToken,
-    expires_in: data.expires_in,
-  };
+  console.log(`[Discovery ${VERSION}] ✅ App token acquired. Expires in ${data.expires_in}s`);
+  return data.access_token;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// GRAPH API — Paginated fetch for messages with attachments
+// GRAPH API — Paginated fetch using Application permissions
+// Endpoint: /users/{mailbox}/messages (NOT /me/messages)
 // ═══════════════════════════════════════════════════════════════
 interface GraphMessage {
   id: string;
@@ -202,24 +188,23 @@ interface GraphAttachment {
 
 async function fetchAllMessagesWithAttachments(
   accessToken: string,
-  daysBack: number = 30
+  targetMailbox: string
 ): Promise<GraphMessage[]> {
-  const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
-  // v4.1.0: Simplified filter — just hasAttachments + date range
-  // No complex filtering that triggers InefficientFilter errors
-  const filter = `hasAttachments eq true and receivedDateTime ge ${since}`;
+  // Fixed Q1 forensic window
+  const filter = `hasAttachments eq true and receivedDateTime ge ${Q1_START} and receivedDateTime le ${Q1_END}`;
   const select = "id,receivedDateTime,subject,from,hasAttachments";
   const orderBy = "receivedDateTime desc";
 
   const allMessages: GraphMessage[] = [];
+  // v4.2.0: Application endpoint — /users/{mailbox}/messages
   let nextLink: string | null =
-    `${GRAPH_API_BASE}/me/messages?$filter=${encodeURIComponent(filter)}&$select=${select}&$orderby=${encodeURIComponent(orderBy)}&$top=50`;
+    `${GRAPH_API_BASE}/users/${encodeURIComponent(targetMailbox)}/messages?$filter=${encodeURIComponent(filter)}&$select=${select}&$orderby=${encodeURIComponent(orderBy)}&$top=50`;
 
   let pageCount = 0;
-  const MAX_PAGES = 20; // v4.1.0: Doubled from 10 to 20 (1000 messages)
+  const MAX_PAGES = 20;
 
   while (nextLink && pageCount < MAX_PAGES) {
-    console.log(`[Discovery ${VERSION}] 📬 Fetching page ${pageCount + 1}...`);
+    console.log(`[Discovery ${VERSION}] 📬 Fetching page ${pageCount + 1} from /users/${targetMailbox}/messages...`);
 
     const response = await fetch(nextLink, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -245,9 +230,11 @@ async function fetchAllMessagesWithAttachments(
 
 async function fetchAllAttachments(
   accessToken: string,
+  targetMailbox: string,
   messageId: string
 ): Promise<GraphAttachment[]> {
-  const url = `${GRAPH_API_BASE}/me/messages/${messageId}/attachments?$select=id,name,contentType,size`;
+  // v4.2.0: Application endpoint
+  const url = `${GRAPH_API_BASE}/users/${encodeURIComponent(targetMailbox)}/messages/${messageId}/attachments?$select=id,name,contentType,size`;
 
   const response = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -282,7 +269,7 @@ Deno.serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   // ═══════════════════════════════════════════════════════
-  // AUTH GATE
+  // AUTH GATE — Still validates Supabase caller identity
   // ═══════════════════════════════════════════════════════
   const authHeader = req.headers.get("authorization");
   if (!authHeader) {
@@ -307,60 +294,63 @@ Deno.serve(async (req) => {
   const userId = user.id;
   console.log(`[Discovery ${VERSION}] 🔒 Authenticated: ${userId.slice(0, 8)}...`);
 
-  // Generate a unique scan_id for this run
   const scanId = crypto.randomUUID();
   console.log(`[Discovery ${VERSION}] 🆔 Scan ID: ${scanId.slice(0, 8)}...`);
+  console.log(`[Discovery ${VERSION}] 📅 Q1 Forensic Window: ${Q1_START} → ${Q1_END}`);
 
   try {
     // ═══════════════════════════════════════════════════════
-    // STEP 1: Retrieve stored tokens
+    // STEP 1: Resolve tenant_id from stored tokens
     // ═══════════════════════════════════════════════════════
     const { data: tokenRecord, error: tokenError } = await supabase
       .from("microsoft_oauth_tokens")
-      .select("*")
+      .select("tenant_id")
       .eq("user_id", userId)
       .maybeSingle();
 
-    if (tokenError || !tokenRecord) {
+    if (tokenError || !tokenRecord?.tenant_id) {
+      console.error(`[Discovery ${VERSION}] ❌ No tenant_id found. Cannot use client_credentials without tenant.`);
       return new Response(
         JSON.stringify({
-          error: "NO_CONNECTION",
-          message: "Ghost Siphon not connected.",
+          error: "NO_TENANT",
+          message: "Ghost Siphon requires a stored tenant_id. Complete the OAuth handshake first.",
           siphon_state: "disconnected",
         }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
+    const tenantId = tokenRecord.tenant_id;
+
     // ═══════════════════════════════════════════════════════
-    // STEP 2: Refresh the access token
+    // STEP 2: Acquire app-level token (client_credentials)
+    // No refresh token. No user sign-in. Pure autonomous.
     // ═══════════════════════════════════════════════════════
-    let accessToken: string;
-    try {
-      const refreshed = await refreshAccessToken(tokenRecord.refresh_token);
-      accessToken = refreshed.access_token;
-
-      const newExpiresAt = new Date(Date.now() + refreshed.expires_in * 1000).toISOString();
-      await supabase
-        .from("microsoft_oauth_tokens")
-        .update({
-          access_token: refreshed.access_token,
-          refresh_token: refreshed.refresh_token,
-          expires_at: newExpiresAt,
-        })
-        .eq("user_id", userId);
-    } catch (refreshErr) {
-      const errMsg = refreshErr instanceof Error ? refreshErr.message : String(refreshErr);
-
-      await supabase
-        .from("microsoft_oauth_tokens")
-        .update({ expires_at: new Date(0).toISOString() })
-        .eq("user_id", userId);
-
+    const targetMailbox = Deno.env.get("GHOST_TARGET_MAILBOX");
+    if (!targetMailbox) {
+      console.error(`[Discovery ${VERSION}] ❌ GHOST_TARGET_MAILBOX secret not configured.`);
       return new Response(
         JSON.stringify({
-          error: "TOKEN_REFRESH_FAILED",
-          message: "Re-authentication required.",
+          error: "NO_TARGET_MAILBOX",
+          message: "GHOST_TARGET_MAILBOX secret is required for Application permissions.",
+          siphon_state: "error",
+        }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log(`[Discovery ${VERSION}] 📧 Target mailbox: ${targetMailbox}`);
+
+    let accessToken: string;
+    try {
+      accessToken = await acquireAppToken(tenantId);
+    } catch (tokenErr) {
+      const errMsg = tokenErr instanceof Error ? tokenErr.message : String(tokenErr);
+      console.error(`[Discovery ${VERSION}] ❌ App token acquisition failed:`, errMsg);
+      return new Response(
+        JSON.stringify({
+          error: "TOKEN_ACQUISITION_FAILED",
+          message: errMsg,
           siphon_state: "error",
         }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -388,7 +378,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Also load existing siphoned senders as known
     const { data: siphonedVendors } = await supabase
       .from("siphoned_invoices")
       .select("sender, raw_json")
@@ -407,9 +396,9 @@ Deno.serve(async (req) => {
     console.log(`[Discovery ${VERSION}] 🏭 Known supplier domains: ${knownSupplierDomains.size}`);
 
     // ═══════════════════════════════════════════════════════
-    // STEP 4: Full inbox scan
+    // STEP 4: Full inbox scan — APPLICATION PERMISSIONS
     // ═══════════════════════════════════════════════════════
-    const messages = await fetchAllMessagesWithAttachments(accessToken, 30);
+    const messages = await fetchAllMessagesWithAttachments(accessToken, targetMailbox);
 
     // ═══════════════════════════════════════════════════════
     // STEP 5: Extract, classify, and map — RAW LOG PROTOCOL
@@ -433,7 +422,6 @@ Deno.serve(async (req) => {
     const senderDateMap: Record<string, string[]> = {};
     const existingDedupKeys = new Set<string>();
 
-    // Build dedup set from existing siphoned invoices
     if (siphonedVendors) {
       for (const sv of siphonedVendors) {
         const dedupKey = (sv.raw_json as Record<string, string>)?.dedup_key;
@@ -452,8 +440,7 @@ Deno.serve(async (req) => {
       const senderName = message.from?.emailAddress?.name || senderAddress;
       const senderDomain = senderAddress.split("@")[1]?.toLowerCase() || "unknown";
 
-      // Fetch ALL attachments (not just PDFs) for verbose logging
-      const allAttachments = await fetchAllAttachments(accessToken, message.id);
+      const allAttachments = await fetchAllAttachments(accessToken, targetMailbox, message.id);
       processedMessages++;
 
       for (const att of allAttachments) {
@@ -462,7 +449,7 @@ Deno.serve(async (req) => {
         const isConsumer = CONSUMER_DOMAINS.has(senderDomain);
 
         // ═══════════════════════════════════════════════════
-        // RAW LOG PROTOCOL — Log EVERY attachment, accept or reject
+        // RAW LOG PROTOCOL — Log EVERY attachment
         // ═══════════════════════════════════════════════════
         if (!isPdf) {
           nonPdfRejected++;
@@ -479,7 +466,6 @@ Deno.serve(async (req) => {
         pdfAccepted++;
         const dedupKey = `${message.id}::${att.id}`;
 
-        // Track dates per sender for cadence analysis
         if (!senderDateMap[senderDomain]) {
           senderDateMap[senderDomain] = [];
         }
@@ -511,7 +497,6 @@ Deno.serve(async (req) => {
         };
 
         discoveries.push(discovery);
-
         console.log(`[Discovery ${VERSION}] ✅ ACCEPTED | ${score} | ${senderDomain} | "${att.name}" | ${reason}`);
       }
     }
@@ -524,22 +509,20 @@ Deno.serve(async (req) => {
     console.log(`  Consumer domain skipped: ${consumerDomainSkipped}`);
 
     // ═══════════════════════════════════════════════════════
-    // STEP 5.5: PERSIST discoveries to discovered_invoices table
+    // STEP 5.5: PERSIST discoveries to discovered_invoices
     // ═══════════════════════════════════════════════════════
     if (discoveries.length > 0) {
       console.log(`[Discovery ${VERSION}] 💾 Persisting ${discoveries.length} discoveries to DB...`);
 
-      // Clear previous scan results for this user
       const { error: deleteError } = await supabase
         .from("discovered_invoices")
         .delete()
         .eq("user_id", userId);
-      
+
       if (deleteError) {
         console.error(`[Discovery ${VERSION}] ⚠️ Failed to clear old discoveries:`, deleteError.message);
       }
 
-      // Batch insert in chunks of 50
       const batchSize = 50;
       for (let i = 0; i < discoveries.length; i += batchSize) {
         const batch = discoveries.slice(i, i + batchSize).map((d) => ({
@@ -609,7 +592,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Inject cadence data
     for (const domain of Object.keys(supplierMap)) {
       if (senderDateMap[domain]) {
         supplierMap[domain].cadence = analyzeCadence(senderDateMap[domain]);
@@ -631,8 +613,11 @@ Deno.serve(async (req) => {
         new_data_hash: JSON.stringify({
           phase: "DISCOVERY_SCAN",
           version: VERSION,
+          architecture: "CLIENT_CREDENTIALS",
           scan_id: scanId,
           user_id: userId,
+          target_mailbox: targetMailbox,
+          q1_window: { start: Q1_START, end: Q1_END },
           messages_scanned: processedMessages,
           total_attachments_seen: totalAttachmentsSeen,
           pdfs_accepted: pdfAccepted,
@@ -660,8 +645,10 @@ Deno.serve(async (req) => {
         status: "DISCOVERY_COMPLETE",
         siphon_state: "connected",
         version: VERSION,
+        architecture: "CLIENT_CREDENTIALS",
         scan_id: scanId,
-        scan_window_days: 30,
+        q1_window: { start: Q1_START, end: Q1_END },
+        target_mailbox: targetMailbox,
         messages_scanned: processedMessages,
         total_pdfs_found: discoveries.length,
         raw_log: {
