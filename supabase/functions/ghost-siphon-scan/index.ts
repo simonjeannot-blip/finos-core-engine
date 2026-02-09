@@ -3,18 +3,13 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // ═══════════════════════════════════════════════════════════════
 // GHOST SIPHON — Autonomous Scanner v4.2.0
 //
-// v4.2.0 INDUSTRIAL UPGRADE:
-//   - AUTONOMOUS: Client Credentials flow (no user sign-in)
+// v4.2.0 INDUSTRIAL UPGRADE — FULLY AUTONOMOUS:
+//   - Client Credentials flow (no user sign-in)
 //   - APPLICATION PERMISSIONS: /users/{mailbox}/messages
 //   - Scope: https://graph.microsoft.com/.default
 //   - Target mailbox via GHOST_TARGET_MAILBOX secret
-//   - Rolling 24h scan window for ongoing siphoning
-//
-// ARCHITECTURE: POST-triggered inbox scanner
-//   1. Acquire app-level token via client_credentials grant
-//   2. Query Microsoft Graph /users/{mailbox}/messages (last 24h)
-//   3. Deduplicate & inject into siphoned_invoices
-//   4. Audit trail for every scan cycle
+//   - User resolved from microsoft_oauth_tokens vault
+//   - Rolling 24h scan for ongoing siphoning
 //
 // PERMISSIONS REQUIRED: Mail.Read (Application), User.Read.All (Application)
 // ═══════════════════════════════════════════════════════════════
@@ -32,14 +27,13 @@ const IMMUTABLE_CLIENT_ID = "9878609b-2022-47dc-bfef-0611cf133dbc";
 const GRAPH_API_BASE = "https://graph.microsoft.com/v1.0";
 
 // ═══════════════════════════════════════════════════════════════
-// CLIENT CREDENTIALS TOKEN — Autonomous app-level access
+// CLIENT CREDENTIALS TOKEN
 // ═══════════════════════════════════════════════════════════════
 async function acquireAppToken(tenantId: string): Promise<string> {
   const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET")!;
   const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
 
   console.log(`[Scanner ${VERSION}] 🔑 Acquiring app token via client_credentials...`);
-  console.log(`[Scanner ${VERSION}] 🏢 Tenant: ${tenantId}`);
 
   const response = await fetch(tokenUrl, {
     method: "POST",
@@ -53,7 +47,6 @@ async function acquireAppToken(tenantId: string): Promise<string> {
   });
 
   const body = await response.text();
-
   if (!response.ok) {
     console.error(`[Scanner ${VERSION}] ❌ Client credentials token failed:`, body);
     throw new Error(`CLIENT_CREDENTIALS_FAILED: ${response.status} — ${body}`);
@@ -65,8 +58,29 @@ async function acquireAppToken(tenantId: string): Promise<string> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// GRAPH API — Fetch messages with PDF attachments (last 24h)
-// Endpoint: /users/{mailbox}/messages (NOT /me/messages)
+// AUTONOMOUS USER RESOLVER
+// ═══════════════════════════════════════════════════════════════
+async function resolveAutonomousUser(
+  supabase: ReturnType<typeof createClient>
+): Promise<{ userId: string; tenantId: string } | null> {
+  const { data, error } = await supabase
+    .from("microsoft_oauth_tokens")
+    .select("user_id, tenant_id")
+    .not("tenant_id", "is", null)
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data?.user_id || !data?.tenant_id) {
+    console.error(`[Scanner ${VERSION}] ❌ Autonomous resolver failed:`, error?.message || "No records");
+    return null;
+  }
+
+  console.log(`[Scanner ${VERSION}] 🤖 Resolved: user=${data.user_id.slice(0, 8)}... tenant=${data.tenant_id}`);
+  return { userId: data.user_id, tenantId: data.tenant_id };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GRAPH API — /users/{mailbox}/messages (Application permissions)
 // ═══════════════════════════════════════════════════════════════
 interface GraphMessage {
   id: string;
@@ -84,18 +98,14 @@ interface GraphAttachment {
 }
 
 async function fetchRecentMessagesWithAttachments(
-  accessToken: string,
-  targetMailbox: string
+  accessToken: string, targetMailbox: string
 ): Promise<GraphMessage[]> {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
   const filter = `hasAttachments eq true and receivedDateTime ge ${since}`;
   const select = "id,receivedDateTime,subject,from,hasAttachments";
   const orderBy = "receivedDateTime desc";
-  const top = 50;
 
-  // v4.2.0: Application endpoint
-  const url = `${GRAPH_API_BASE}/users/${encodeURIComponent(targetMailbox)}/messages?$filter=${encodeURIComponent(filter)}&$select=${select}&$orderby=${encodeURIComponent(orderBy)}&$top=${top}`;
+  const url = `${GRAPH_API_BASE}/users/${encodeURIComponent(targetMailbox)}/messages?$filter=${encodeURIComponent(filter)}&$select=${select}&$orderby=${encodeURIComponent(orderBy)}&$top=50`;
 
   console.log(`[Scanner ${VERSION}] 📬 Querying /users/${targetMailbox}/messages (last 24h)...`);
 
@@ -105,22 +115,19 @@ async function fetchRecentMessagesWithAttachments(
 
   if (!response.ok) {
     const errorBody = await response.text();
-    console.error(`[Scanner ${VERSION}] ❌ Graph messages query failed:`, response.status, errorBody);
+    console.error(`[Scanner ${VERSION}] ❌ Graph query failed:`, response.status, errorBody);
     throw new Error(`GRAPH_MESSAGES_FAILED: ${response.status}`);
   }
 
   const data = await response.json();
   const messages: GraphMessage[] = data.value || [];
-  console.log(`[Scanner ${VERSION}] 📬 Found ${messages.length} messages with attachments in last 24h`);
+  console.log(`[Scanner ${VERSION}] 📬 Found ${messages.length} messages with attachments`);
   return messages;
 }
 
 async function fetchPdfAttachments(
-  accessToken: string,
-  targetMailbox: string,
-  messageId: string
+  accessToken: string, targetMailbox: string, messageId: string
 ): Promise<GraphAttachment[]> {
-  // v4.2.0: Application endpoint
   const url = `${GRAPH_API_BASE}/users/${encodeURIComponent(targetMailbox)}/messages/${messageId}/attachments?$select=id,name,contentType,size`;
 
   const response = await fetch(url, {
@@ -128,17 +135,13 @@ async function fetchPdfAttachments(
   });
 
   if (!response.ok) {
-    console.warn(`[Scanner ${VERSION}] ⚠️ Could not fetch attachments for message ${messageId.slice(0, 12)}...`);
+    console.warn(`[Scanner ${VERSION}] ⚠️ Attachment fetch failed for ${messageId.slice(0, 12)}...`);
     return [];
   }
 
   const data = await response.json();
-  const attachments: GraphAttachment[] = data.value || [];
-
-  return attachments.filter(
-    (a) =>
-      a.contentType === "application/pdf" ||
-      a.name?.toLowerCase().endsWith(".pdf")
+  return (data.value || []).filter(
+    (a: GraphAttachment) => a.contentType === "application/pdf" || a.name?.toLowerCase().endsWith(".pdf")
   );
 }
 
@@ -146,9 +149,7 @@ async function fetchPdfAttachments(
 // AUDIT LOG
 // ═══════════════════════════════════════════════════════════════
 async function logAuditEvent(
-  supabase: ReturnType<typeof createClient>,
-  actionType: string,
-  context: Record<string, unknown>
+  supabase: ReturnType<typeof createClient>, actionType: string, context: Record<string, unknown>
 ): Promise<void> {
   try {
     await supabase.from("system_audit_log").insert({
@@ -156,22 +157,16 @@ async function logAuditEvent(
       record_id: "00000000-0000-0000-0000-000000000000",
       action_type: actionType,
       old_data_hash: null,
-      new_data_hash: JSON.stringify({
-        ...context,
-        timestamp: new Date().toISOString(),
-        source: "GHOST_SIPHON_SCANNER",
-        version: VERSION,
-      }),
+      new_data_hash: JSON.stringify({ ...context, timestamp: new Date().toISOString(), source: "GHOST_SIPHON_SCANNER", version: VERSION }),
       changed_by: null,
     });
-    console.log(`[Scanner ${VERSION}] 📝 Audit: ${actionType}`);
   } catch (err) {
     console.error(`[Scanner ${VERSION}] ⚠️ Audit log write failed:`, err);
   }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MAIN HANDLER
+// MAIN HANDLER — FULLY AUTONOMOUS
 // ═══════════════════════════════════════════════════════════════
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -189,100 +184,83 @@ Deno.serve(async (req) => {
   const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-  // ═══════════════════════════════════════════════════════════
-  // AUTH GATE — Validates Supabase caller identity
-  // ═══════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════
+  // AUTONOMOUS AUTH — Resolve user from vault
+  // ═══════════════════════════════════════════════════════
+  let userId: string;
+  let tenantId: string;
+
   const authHeader = req.headers.get("authorization");
-  if (!authHeader) {
-    return new Response(
-      JSON.stringify({ error: "AUTH_REQUIRED" }),
-      { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  }
 
-  const supabaseAuth = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
-    global: { headers: { Authorization: authHeader } },
-  });
-  const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    const supabaseAuth = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const { data: { user } } = await supabaseAuth.auth.getUser();
 
-  if (authError || !user) {
-    return new Response(
-      JSON.stringify({ error: "AUTH_FAILED" }),
-      { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  }
+    if (user) {
+      userId = user.id;
+      const { data: tokenRecord } = await supabase
+        .from("microsoft_oauth_tokens")
+        .select("tenant_id")
+        .eq("user_id", userId)
+        .maybeSingle();
 
-  const userId = user.id;
-  console.log(`[Scanner ${VERSION}] 🔒 Authenticated: ${userId.slice(0, 8)}...`);
-
-  try {
-    // ═══════════════════════════════════════════════════════
-    // STEP 1: Resolve tenant_id from stored tokens
-    // ═══════════════════════════════════════════════════════
-    const { data: tokenRecord, error: tokenError } = await supabase
-      .from("microsoft_oauth_tokens")
-      .select("tenant_id")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (tokenError || !tokenRecord?.tenant_id) {
-      console.error(`[Scanner ${VERSION}] ❌ No tenant_id found.`);
+      if (!tokenRecord?.tenant_id) {
+        return new Response(
+          JSON.stringify({ error: "NO_TENANT", siphon_state: "disconnected" }),
+          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      tenantId = tokenRecord.tenant_id;
+      console.log(`[Scanner ${VERSION}] 🔒 Authenticated: ${userId.slice(0, 8)}...`);
+    } else {
+      const resolved = await resolveAutonomousUser(supabase);
+      if (!resolved) {
+        return new Response(
+          JSON.stringify({ error: "NO_CONNECTED_USER", siphon_state: "disconnected" }),
+          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      userId = resolved.userId;
+      tenantId = resolved.tenantId;
+    }
+  } else {
+    console.log(`[Scanner ${VERSION}] 🤖 AUTONOMOUS MODE`);
+    const resolved = await resolveAutonomousUser(supabase);
+    if (!resolved) {
       return new Response(
-        JSON.stringify({
-          error: "NO_TENANT",
-          message: "Ghost Siphon requires a stored tenant_id.",
-          siphon_state: "disconnected",
-        }),
+        JSON.stringify({ error: "NO_CONNECTED_USER", siphon_state: "disconnected" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+    userId = resolved.userId;
+    tenantId = resolved.tenantId;
+  }
 
-    const tenantId = tokenRecord.tenant_id;
-
-    // ═══════════════════════════════════════════════════════
-    // STEP 2: Acquire app-level token + resolve mailbox
-    // ═══════════════════════════════════════════════════════
+  try {
     const targetMailbox = Deno.env.get("GHOST_TARGET_MAILBOX");
     if (!targetMailbox) {
-      console.error(`[Scanner ${VERSION}] ❌ GHOST_TARGET_MAILBOX secret not configured.`);
       return new Response(
-        JSON.stringify({
-          error: "NO_TARGET_MAILBOX",
-          message: "GHOST_TARGET_MAILBOX secret is required.",
-          siphon_state: "error",
-        }),
+        JSON.stringify({ error: "NO_TARGET_MAILBOX", siphon_state: "error" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    console.log(`[Scanner ${VERSION}] 📧 Target mailbox: ${targetMailbox}`);
+    console.log(`[Scanner ${VERSION}] 📧 Target: ${targetMailbox}`);
 
     let accessToken: string;
     try {
       accessToken = await acquireAppToken(tenantId);
     } catch (tokenErr) {
       const errMsg = tokenErr instanceof Error ? tokenErr.message : String(tokenErr);
-      console.error(`[Scanner ${VERSION}] ❌ App token acquisition failed:`, errMsg);
-
-      await logAuditEvent(supabase, "ENDPOINT_FAILURE", {
-        phase: "TOKEN_ACQUISITION",
-        user_id: userId,
-        error: errMsg,
-      });
-
+      await logAuditEvent(supabase, "ENDPOINT_FAILURE", { phase: "TOKEN_ACQUISITION", user_id: userId, error: errMsg });
       return new Response(
-        JSON.stringify({
-          error: "TOKEN_ACQUISITION_FAILED",
-          message: errMsg,
-          siphon_state: "error",
-        }),
+        JSON.stringify({ error: "TOKEN_ACQUISITION_FAILED", message: errMsg, siphon_state: "error" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // ═══════════════════════════════════════════════════════
-    // STEP 3: Scan inbox for PDF attachments (last 24h)
-    // ═══════════════════════════════════════════════════════
     const messages = await fetchRecentMessagesWithAttachments(accessToken, targetMailbox);
 
     let newInvoicesCount = 0;
@@ -302,14 +280,8 @@ Deno.serve(async (req) => {
           .contains("raw_json", { dedup_key: deduplicationKey })
           .maybeSingle();
 
-        if (existing) {
-          skippedCount++;
-          continue;
-        }
+        if (existing) { skippedCount++; continue; }
 
-        // ═══════════════════════════════════════════════════
-        // EVIDENCE INJECTION
-        // ═══════════════════════════════════════════════════
         const senderAddress = message.from?.emailAddress?.address || "Unknown";
         const senderName = message.from?.emailAddress?.name || senderAddress;
 
@@ -324,65 +296,39 @@ Deno.serve(async (req) => {
             status: "pending",
             amount_detected: 0,
             raw_json: {
-              dedup_key: deduplicationKey,
-              message_id: message.id,
-              attachment_id: pdf.id,
-              attachment_size: pdf.size,
-              content_type: pdf.contentType,
-              sender_address: senderAddress,
-              sender_name: senderName,
-              architecture: "CLIENT_CREDENTIALS",
-              version: VERSION,
+              dedup_key: deduplicationKey, message_id: message.id,
+              attachment_id: pdf.id, attachment_size: pdf.size,
+              content_type: pdf.contentType, sender_address: senderAddress,
+              sender_name: senderName, architecture: "CLIENT_CREDENTIALS_AUTONOMOUS", version: VERSION,
             },
           });
 
         if (insertError) {
-          console.error(`[Scanner ${VERSION}] ❌ Insert failed for ${pdf.name}:`, insertError.message);
-          scanResults.push({
-            sender: senderAddress,
-            subject: message.subject,
-            attachment: pdf.name,
-            status: "INSERT_FAILED",
-          });
+          console.error(`[Scanner ${VERSION}] ❌ Insert failed: ${pdf.name}:`, insertError.message);
+          scanResults.push({ sender: senderAddress, subject: message.subject, attachment: pdf.name, status: "INSERT_FAILED" });
         } else {
           newInvoicesCount++;
-          scanResults.push({
-            sender: senderAddress,
-            subject: message.subject,
-            attachment: pdf.name,
-            status: "INJECTED",
-          });
+          scanResults.push({ sender: senderAddress, subject: message.subject, attachment: pdf.name, status: "INJECTED" });
           console.log(`[Scanner ${VERSION}] 💉 Injected: ${pdf.name} from ${senderAddress}`);
         }
       }
     }
 
-    // ═══════════════════════════════════════════════════════
-    // STEP 4: Audit the scan cycle
-    // ═══════════════════════════════════════════════════════
     await logAuditEvent(supabase, "SYNC_SUCCESS", {
-      phase: "INBOX_SCAN",
-      architecture: "CLIENT_CREDENTIALS",
-      user_id: userId,
-      target_mailbox: targetMailbox,
-      messages_scanned: messages.length,
-      new_invoices: newInvoicesCount,
-      duplicates_skipped: skippedCount,
-      tenant_id: tenantId,
+      phase: "INBOX_SCAN", architecture: "CLIENT_CREDENTIALS_AUTONOMOUS",
+      user_id: userId, target_mailbox: targetMailbox,
+      messages_scanned: messages.length, new_invoices: newInvoicesCount,
+      duplicates_skipped: skippedCount, tenant_id: tenantId,
     });
 
-    console.log(`[Scanner ${VERSION}] ✅ Scan complete: ${newInvoicesCount} new, ${skippedCount} duplicates`);
+    console.log(`[Scanner ${VERSION}] ✅ Complete: ${newInvoicesCount} new, ${skippedCount} dupes`);
 
     return new Response(
       JSON.stringify({
-        status: "SCAN_COMPLETE",
-        siphon_state: "connected",
-        version: VERSION,
-        architecture: "CLIENT_CREDENTIALS",
-        messages_scanned: messages.length,
-        new_invoices: newInvoicesCount,
-        duplicates_skipped: skippedCount,
-        scan_timestamp: new Date().toISOString(),
+        status: "SCAN_COMPLETE", siphon_state: "connected", version: VERSION,
+        architecture: "CLIENT_CREDENTIALS_AUTONOMOUS",
+        messages_scanned: messages.length, new_invoices: newInvoicesCount,
+        duplicates_skipped: skippedCount, scan_timestamp: new Date().toISOString(),
         results: scanResults,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -390,20 +336,9 @@ Deno.serve(async (req) => {
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[Scanner ${VERSION}] ❌ Scan failed: ${errMsg}`);
-
-    await logAuditEvent(supabase, "ENDPOINT_FAILURE", {
-      phase: "INBOX_SCAN",
-      user_id: userId,
-      error: errMsg,
-    });
-
+    await logAuditEvent(supabase, "ENDPOINT_FAILURE", { phase: "INBOX_SCAN", user_id: userId, error: errMsg });
     return new Response(
-      JSON.stringify({
-        error: "SCAN_FAILED",
-        message: errMsg,
-        siphon_state: "error",
-        version: VERSION,
-      }),
+      JSON.stringify({ error: "SCAN_FAILED", message: errMsg, siphon_state: "error", version: VERSION }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

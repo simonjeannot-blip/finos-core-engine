@@ -3,20 +3,13 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // ═══════════════════════════════════════════════════════════════
 // GHOST SIPHON — Deep Discovery Scanner v4.2.0
 //
-// v4.2.0 INDUSTRIAL UPGRADE:
-//   - AUTONOMOUS: Client Credentials flow (no user sign-in)
+// v4.2.0 INDUSTRIAL UPGRADE — FULLY AUTONOMOUS:
+//   - Client Credentials flow (no user sign-in, no Supabase auth required)
 //   - APPLICATION PERMISSIONS: /users/{mailbox}/messages
 //   - FIXED Q1 FORENSIC WINDOW: Jan 1 → Feb 9, 2026
 //   - Scope: https://graph.microsoft.com/.default
 //   - Target mailbox via GHOST_TARGET_MAILBOX secret
-//
-// ARCHITECTURE: POST-triggered forensic inbox scan
-//   1. Acquire app-level token via client_credentials grant
-//   2. Query Microsoft Graph /users/{mailbox}/messages
-//   3. Extract & classify metadata with confidence scoring
-//   4. Cross-reference senders against known ledger vendors
-//   5. Persist to discovered_invoices table
-//   6. Return the full Supplier Intelligence Map
+//   - User resolved from microsoft_oauth_tokens vault (autonomous)
 //
 // PERMISSIONS REQUIRED: Mail.Read (Application), User.Read.All (Application)
 // ═══════════════════════════════════════════════════════════════
@@ -33,15 +26,9 @@ const corsHeaders = {
 const IMMUTABLE_CLIENT_ID = "9878609b-2022-47dc-bfef-0611cf133dbc";
 const GRAPH_API_BASE = "https://graph.microsoft.com/v1.0";
 
-// ═══════════════════════════════════════════════════════════════
-// Q1 FORENSIC WINDOW — Fixed extraction range
-// ═══════════════════════════════════════════════════════════════
 const Q1_START = "2026-01-01T00:00:00Z";
 const Q1_END = "2026-02-09T23:59:59Z";
 
-// ═══════════════════════════════════════════════════════════════
-// CONSUMER DOMAIN BLOCKLIST — Skip personal email accounts
-// ═══════════════════════════════════════════════════════════════
 const CONSUMER_DOMAINS = new Set([
   "gmail.com", "googlemail.com",
   "yahoo.com", "yahoo.co.uk", "yahoo.co.in",
@@ -58,9 +45,6 @@ const CONSUMER_DOMAINS = new Set([
   "tutanota.com", "tuta.io",
 ]);
 
-// ═══════════════════════════════════════════════════════════════
-// CONFIDENCE SCORING ENGINE — v4.1.0 WIDENED NET (preserved)
-// ═══════════════════════════════════════════════════════════════
 const HIGH_CONFIDENCE_KEYWORDS = [
   "invoice", "bill", "statement", "receipt", "remittance",
   "payment", "purchase order", "po#", "credit note", "debit note",
@@ -91,42 +75,24 @@ function classifyConfidence(
 
   const invoicePattern = /\b(inv|invoice|bill|stmt|statement|order|quote)[_\-\s]?\d*/i;
   if (invoicePattern.test(filename)) {
-    return {
-      score: "HIGH",
-      reason: `Filename pattern match: "${filename}"`,
-    };
+    return { score: "HIGH", reason: `Filename pattern match: "${filename}"` };
   }
 
   if (knownSupplierDomains.has(senderDomain)) {
-    return {
-      score: "MEDIUM",
-      reason: `Known supplier domain: ${senderDomain}`,
-    };
+    return { score: "MEDIUM", reason: `Known supplier domain: ${senderDomain}` };
   }
 
-  return {
-    score: "LOW",
-    reason: "Non-consumer business domain PDF — no keyword match",
-  };
+  return { score: "LOW", reason: "Non-consumer business domain PDF — no keyword match" };
 }
 
-// ═══════════════════════════════════════════════════════════════
-// CADENCE ANALYSIS — Detect arrival patterns
-// ═══════════════════════════════════════════════════════════════
 function analyzeCadence(dates: string[]): string {
   if (dates.length < 2) return "INSUFFICIENT_DATA";
-
-  const sorted = dates
-    .map((d) => new Date(d).getTime())
-    .sort((a, b) => a - b);
-
+  const sorted = dates.map((d) => new Date(d).getTime()).sort((a, b) => a - b);
   const gaps: number[] = [];
   for (let i = 1; i < sorted.length; i++) {
     gaps.push((sorted[i] - sorted[i - 1]) / (1000 * 60 * 60 * 24));
   }
-
   const avgGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
-
   if (avgGap <= 8) return "WEEKLY";
   if (avgGap <= 16) return "BI_WEEKLY";
   if (avgGap <= 35) return "MONTHLY";
@@ -134,8 +100,7 @@ function analyzeCadence(dates: string[]): string {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// CLIENT CREDENTIALS TOKEN — Autonomous app-level access
-// No user sign-in. No refresh tokens. Pure machine-to-machine.
+// CLIENT CREDENTIALS TOKEN — Pure machine-to-machine
 // ═══════════════════════════════════════════════════════════════
 async function acquireAppToken(tenantId: string): Promise<string> {
   const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET")!;
@@ -168,8 +133,7 @@ async function acquireAppToken(tenantId: string): Promise<string> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// GRAPH API — Paginated fetch using Application permissions
-// Endpoint: /users/{mailbox}/messages (NOT /me/messages)
+// GRAPH API — Application permissions: /users/{mailbox}/messages
 // ═══════════════════════════════════════════════════════════════
 interface GraphMessage {
   id: string;
@@ -190,13 +154,11 @@ async function fetchAllMessagesWithAttachments(
   accessToken: string,
   targetMailbox: string
 ): Promise<GraphMessage[]> {
-  // Fixed Q1 forensic window
   const filter = `hasAttachments eq true and receivedDateTime ge ${Q1_START} and receivedDateTime le ${Q1_END}`;
   const select = "id,receivedDateTime,subject,from,hasAttachments";
   const orderBy = "receivedDateTime desc";
 
   const allMessages: GraphMessage[] = [];
-  // v4.2.0: Application endpoint — /users/{mailbox}/messages
   let nextLink: string | null =
     `${GRAPH_API_BASE}/users/${encodeURIComponent(targetMailbox)}/messages?$filter=${encodeURIComponent(filter)}&$select=${select}&$orderby=${encodeURIComponent(orderBy)}&$top=50`;
 
@@ -213,7 +175,7 @@ async function fetchAllMessagesWithAttachments(
     if (!response.ok) {
       const errorBody = await response.text();
       console.error(`[Discovery ${VERSION}] ❌ Graph query failed:`, response.status, errorBody);
-      throw new Error(`GRAPH_MESSAGES_FAILED: ${response.status}`);
+      throw new Error(`GRAPH_MESSAGES_FAILED: ${response.status} — ${errorBody}`);
     }
 
     const data = await response.json();
@@ -233,7 +195,6 @@ async function fetchAllAttachments(
   targetMailbox: string,
   messageId: string
 ): Promise<GraphAttachment[]> {
-  // v4.2.0: Application endpoint
   const url = `${GRAPH_API_BASE}/users/${encodeURIComponent(targetMailbox)}/messages/${messageId}/attachments?$select=id,name,contentType,size`;
 
   const response = await fetch(url, {
@@ -250,7 +211,12 @@ async function fetchAllAttachments(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MAIN HANDLER
+// MAIN HANDLER — FULLY AUTONOMOUS
+//
+// Auth model:
+//   1. If Supabase auth header present → use that user_id
+//   2. If no auth header → resolve user from microsoft_oauth_tokens
+//      (single-tenant autonomous mode)
 // ═══════════════════════════════════════════════════════════════
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -269,90 +235,95 @@ Deno.serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   // ═══════════════════════════════════════════════════════
-  // AUTH GATE — Still validates Supabase caller identity
+  // AUTONOMOUS AUTH — Resolve user_id + tenant_id
+  // No login required. Machine-to-machine only.
   // ═══════════════════════════════════════════════════════
+  let userId: string;
+  let tenantId: string;
+
   const authHeader = req.headers.get("authorization");
-  if (!authHeader) {
-    return new Response(
-      JSON.stringify({ error: "AUTH_REQUIRED" }),
-      { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    // Authenticated caller — use their identity
+    const supabaseAuth = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+
+    if (!authError && user) {
+      userId = user.id;
+      console.log(`[Discovery ${VERSION}] 🔒 Authenticated caller: ${userId.slice(0, 8)}...`);
+
+      const { data: tokenRecord } = await supabase
+        .from("microsoft_oauth_tokens")
+        .select("tenant_id")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (!tokenRecord?.tenant_id) {
+        return new Response(
+          JSON.stringify({ error: "NO_TENANT", message: "No tenant_id for authenticated user.", siphon_state: "disconnected" }),
+          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      tenantId = tokenRecord.tenant_id;
+    } else {
+      // Auth header present but invalid — fall through to autonomous
+      console.warn(`[Discovery ${VERSION}] ⚠️ Auth header present but invalid. Falling through to autonomous mode.`);
+      const resolved = await resolveAutonomousUser(supabase);
+      if (!resolved) {
+        return new Response(
+          JSON.stringify({ error: "NO_CONNECTED_USER", message: "No microsoft_oauth_tokens record found.", siphon_state: "disconnected" }),
+          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      userId = resolved.userId;
+      tenantId = resolved.tenantId;
+    }
+  } else {
+    // No auth header — AUTONOMOUS MODE
+    console.log(`[Discovery ${VERSION}] 🤖 AUTONOMOUS MODE — No auth header. Resolving user from vault...`);
+    const resolved = await resolveAutonomousUser(supabase);
+    if (!resolved) {
+      return new Response(
+        JSON.stringify({ error: "NO_CONNECTED_USER", message: "No microsoft_oauth_tokens record found.", siphon_state: "disconnected" }),
+        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    userId = resolved.userId;
+    tenantId = resolved.tenantId;
   }
-
-  const supabaseAuth = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
-    global: { headers: { Authorization: authHeader } },
-  });
-  const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
-
-  if (authError || !user) {
-    return new Response(
-      JSON.stringify({ error: "AUTH_FAILED" }),
-      { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  }
-
-  const userId = user.id;
-  console.log(`[Discovery ${VERSION}] 🔒 Authenticated: ${userId.slice(0, 8)}...`);
 
   const scanId = crypto.randomUUID();
   console.log(`[Discovery ${VERSION}] 🆔 Scan ID: ${scanId.slice(0, 8)}...`);
+  console.log(`[Discovery ${VERSION}] 👤 User: ${userId.slice(0, 8)}... | Tenant: ${tenantId}`);
   console.log(`[Discovery ${VERSION}] 📅 Q1 Forensic Window: ${Q1_START} → ${Q1_END}`);
 
   try {
     // ═══════════════════════════════════════════════════════
-    // STEP 1: Resolve tenant_id from stored tokens
-    // ═══════════════════════════════════════════════════════
-    const { data: tokenRecord, error: tokenError } = await supabase
-      .from("microsoft_oauth_tokens")
-      .select("tenant_id")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (tokenError || !tokenRecord?.tenant_id) {
-      console.error(`[Discovery ${VERSION}] ❌ No tenant_id found. Cannot use client_credentials without tenant.`);
-      return new Response(
-        JSON.stringify({
-          error: "NO_TENANT",
-          message: "Ghost Siphon requires a stored tenant_id. Complete the OAuth handshake first.",
-          siphon_state: "disconnected",
-        }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const tenantId = tokenRecord.tenant_id;
-
-    // ═══════════════════════════════════════════════════════
-    // STEP 2: Acquire app-level token (client_credentials)
-    // No refresh token. No user sign-in. Pure autonomous.
+    // STEP 1: Resolve target mailbox
     // ═══════════════════════════════════════════════════════
     const targetMailbox = Deno.env.get("GHOST_TARGET_MAILBOX");
     if (!targetMailbox) {
       console.error(`[Discovery ${VERSION}] ❌ GHOST_TARGET_MAILBOX secret not configured.`);
       return new Response(
-        JSON.stringify({
-          error: "NO_TARGET_MAILBOX",
-          message: "GHOST_TARGET_MAILBOX secret is required for Application permissions.",
-          siphon_state: "error",
-        }),
+        JSON.stringify({ error: "NO_TARGET_MAILBOX", message: "GHOST_TARGET_MAILBOX secret is required.", siphon_state: "error" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     console.log(`[Discovery ${VERSION}] 📧 Target mailbox: ${targetMailbox}`);
 
+    // ═══════════════════════════════════════════════════════
+    // STEP 2: Acquire app-level token (client_credentials)
+    // ═══════════════════════════════════════════════════════
     let accessToken: string;
     try {
       accessToken = await acquireAppToken(tenantId);
     } catch (tokenErr) {
       const errMsg = tokenErr instanceof Error ? tokenErr.message : String(tokenErr);
-      console.error(`[Discovery ${VERSION}] ❌ App token acquisition failed:`, errMsg);
       return new Response(
-        JSON.stringify({
-          error: "TOKEN_ACQUISITION_FAILED",
-          message: errMsg,
-          siphon_state: "error",
-        }),
+        JSON.stringify({ error: "TOKEN_ACQUISITION_FAILED", message: errMsg, siphon_state: "error" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -372,9 +343,7 @@ Deno.serve(async (req) => {
       for (const v of ledgerVendors) {
         knownVendorNames.add(v.vendor_name.toLowerCase());
         const domainMatch = v.vendor_name.match(/@?([\w.-]+\.\w{2,})/);
-        if (domainMatch) {
-          knownSupplierDomains.add(domainMatch[1].toLowerCase());
-        }
+        if (domainMatch) knownSupplierDomains.add(domainMatch[1].toLowerCase());
       }
     }
 
@@ -401,7 +370,7 @@ Deno.serve(async (req) => {
     const messages = await fetchAllMessagesWithAttachments(accessToken, targetMailbox);
 
     // ═══════════════════════════════════════════════════════
-    // STEP 5: Extract, classify, and map — RAW LOG PROTOCOL
+    // STEP 5: Extract, classify, map — RAW LOG PROTOCOL
     // ═══════════════════════════════════════════════════════
     interface DiscoveredInvoice {
       message_id: string;
@@ -448,9 +417,6 @@ Deno.serve(async (req) => {
         const isPdf = att.contentType === "application/pdf" || att.name?.toLowerCase().endsWith(".pdf");
         const isConsumer = CONSUMER_DOMAINS.has(senderDomain);
 
-        // ═══════════════════════════════════════════════════
-        // RAW LOG PROTOCOL — Log EVERY attachment
-        // ═══════════════════════════════════════════════════
         if (!isPdf) {
           nonPdfRejected++;
           console.log(`[Discovery ${VERSION}] 📎 REJECTED (non-PDF) | ${senderDomain} | "${att.name}" | type=${att.contentType} | size=${att.size}`);
@@ -466,22 +432,16 @@ Deno.serve(async (req) => {
         pdfAccepted++;
         const dedupKey = `${message.id}::${att.id}`;
 
-        if (!senderDateMap[senderDomain]) {
-          senderDateMap[senderDomain] = [];
-        }
+        if (!senderDateMap[senderDomain]) senderDateMap[senderDomain] = [];
         senderDateMap[senderDomain].push(message.receivedDateTime);
 
         const { score, reason } = classifyConfidence(
-          message.subject || "",
-          att.name || "",
-          senderDomain,
-          knownSupplierDomains
+          message.subject || "", att.name || "", senderDomain, knownSupplierDomains
         );
 
-        const isKnown = knownSupplierDomains.has(senderDomain) ||
-          knownVendorNames.has(senderName.toLowerCase());
+        const isKnown = knownSupplierDomains.has(senderDomain) || knownVendorNames.has(senderName.toLowerCase());
 
-        const discovery: DiscoveredInvoice = {
+        discoveries.push({
           message_id: message.id,
           sender_name: senderName,
           sender_address: senderAddress,
@@ -494,9 +454,8 @@ Deno.serve(async (req) => {
           confidence_reason: reason,
           is_known_supplier: isKnown,
           is_already_siphoned: existingDedupKeys.has(dedupKey),
-        };
+        });
 
-        discoveries.push(discovery);
         console.log(`[Discovery ${VERSION}] ✅ ACCEPTED | ${score} | ${senderDomain} | "${att.name}" | ${reason}`);
       }
     }
@@ -509,19 +468,12 @@ Deno.serve(async (req) => {
     console.log(`  Consumer domain skipped: ${consumerDomainSkipped}`);
 
     // ═══════════════════════════════════════════════════════
-    // STEP 5.5: PERSIST discoveries to discovered_invoices
+    // STEP 5.5: PERSIST to discovered_invoices
     // ═══════════════════════════════════════════════════════
     if (discoveries.length > 0) {
-      console.log(`[Discovery ${VERSION}] 💾 Persisting ${discoveries.length} discoveries to DB...`);
+      console.log(`[Discovery ${VERSION}] 💾 Persisting ${discoveries.length} discoveries...`);
 
-      const { error: deleteError } = await supabase
-        .from("discovered_invoices")
-        .delete()
-        .eq("user_id", userId);
-
-      if (deleteError) {
-        console.error(`[Discovery ${VERSION}] ⚠️ Failed to clear old discoveries:`, deleteError.message);
-      }
+      await supabase.from("discovered_invoices").delete().eq("user_id", userId);
 
       const batchSize = 50;
       for (let i = 0; i < discoveries.length; i += batchSize) {
@@ -542,12 +494,9 @@ Deno.serve(async (req) => {
           is_already_siphoned: d.is_already_siphoned,
         }));
 
-        const { error: insertError } = await supabase
-          .from("discovered_invoices")
-          .insert(batch);
-
+        const { error: insertError } = await supabase.from("discovered_invoices").insert(batch);
         if (insertError) {
-          console.error(`[Discovery ${VERSION}] ❌ Batch insert failed (${i}-${i + batch.length}):`, insertError.message);
+          console.error(`[Discovery ${VERSION}] ❌ Batch insert failed:`, insertError.message);
         } else {
           console.log(`[Discovery ${VERSION}] 💾 Batch ${Math.floor(i / batchSize) + 1} persisted (${batch.length} rows)`);
         }
@@ -569,40 +518,29 @@ Deno.serve(async (req) => {
     }
 
     const supplierMap: Record<string, SupplierProfile> = {};
-
     for (const d of discoveries) {
       if (!supplierMap[d.sender_domain]) {
         supplierMap[d.sender_domain] = {
-          domain: d.sender_domain,
-          sender_names: [],
-          total_pdfs: 0,
-          cadence: "INSUFFICIENT_DATA",
-          is_known: d.is_known_supplier,
-          highest_confidence: d.confidence,
+          domain: d.sender_domain, sender_names: [], total_pdfs: 0,
+          cadence: "INSUFFICIENT_DATA", is_known: d.is_known_supplier, highest_confidence: d.confidence,
         };
       }
       const sp = supplierMap[d.sender_domain];
       sp.total_pdfs++;
-      if (!sp.sender_names.includes(d.sender_name)) {
-        sp.sender_names.push(d.sender_name);
-      }
+      if (!sp.sender_names.includes(d.sender_name)) sp.sender_names.push(d.sender_name);
       const rank = { HIGH: 3, MEDIUM: 2, LOW: 1 };
-      if (rank[d.confidence] > rank[sp.highest_confidence]) {
-        sp.highest_confidence = d.confidence;
-      }
+      if (rank[d.confidence] > rank[sp.highest_confidence]) sp.highest_confidence = d.confidence;
     }
 
     for (const domain of Object.keys(supplierMap)) {
-      if (senderDateMap[domain]) {
-        supplierMap[domain].cadence = analyzeCadence(senderDateMap[domain]);
-      }
+      if (senderDateMap[domain]) supplierMap[domain].cadence = analyzeCadence(senderDateMap[domain]);
     }
 
     const suppliers = Object.values(supplierMap);
     const newSuppliers = suppliers.filter((s) => !s.is_known);
 
     // ═══════════════════════════════════════════════════════
-    // STEP 7: Audit the discovery event
+    // STEP 7: Audit
     // ═══════════════════════════════════════════════════════
     try {
       await supabase.from("system_audit_log").insert({
@@ -611,26 +549,16 @@ Deno.serve(async (req) => {
         action_type: "SYNC_SUCCESS",
         old_data_hash: null,
         new_data_hash: JSON.stringify({
-          phase: "DISCOVERY_SCAN",
-          version: VERSION,
-          architecture: "CLIENT_CREDENTIALS",
-          scan_id: scanId,
-          user_id: userId,
-          target_mailbox: targetMailbox,
+          phase: "DISCOVERY_SCAN", version: VERSION, architecture: "CLIENT_CREDENTIALS_AUTONOMOUS",
+          scan_id: scanId, user_id: userId, target_mailbox: targetMailbox,
           q1_window: { start: Q1_START, end: Q1_END },
-          messages_scanned: processedMessages,
-          total_attachments_seen: totalAttachmentsSeen,
-          pdfs_accepted: pdfAccepted,
-          non_pdfs_rejected: nonPdfRejected,
-          consumer_domain_skipped: consumerDomainSkipped,
+          messages_scanned: processedMessages, pdfs_accepted: pdfAccepted,
           total_pdfs_found: discoveries.length,
-          high_confidence: discoveries.filter((d) => d.confidence === "HIGH").length,
-          medium_confidence: discoveries.filter((d) => d.confidence === "MEDIUM").length,
-          low_confidence: discoveries.filter((d) => d.confidence === "LOW").length,
-          new_suppliers_detected: newSuppliers.length,
-          known_suppliers_matched: suppliers.length - newSuppliers.length,
-          timestamp: new Date().toISOString(),
-          source: "GHOST_DISCOVERY_SCANNER",
+          high: discoveries.filter((d) => d.confidence === "HIGH").length,
+          medium: discoveries.filter((d) => d.confidence === "MEDIUM").length,
+          low: discoveries.filter((d) => d.confidence === "LOW").length,
+          new_suppliers: newSuppliers.length,
+          timestamp: new Date().toISOString(), source: "GHOST_DISCOVERY_SCANNER",
         }),
         changed_by: null,
       });
@@ -638,40 +566,26 @@ Deno.serve(async (req) => {
       console.error(`[Discovery ${VERSION}] ⚠️ Audit log write failed:`, err);
     }
 
-    console.log(`[Discovery ${VERSION}] ✅ Scan complete: ${discoveries.length} PDFs, ${suppliers.length} suppliers, scan_id=${scanId.slice(0, 8)}`);
+    console.log(`[Discovery ${VERSION}] ✅ SCAN COMPLETE: ${discoveries.length} PDFs, ${suppliers.length} suppliers`);
 
     return new Response(
       JSON.stringify({
-        status: "DISCOVERY_COMPLETE",
-        siphon_state: "connected",
-        version: VERSION,
-        architecture: "CLIENT_CREDENTIALS",
-        scan_id: scanId,
-        q1_window: { start: Q1_START, end: Q1_END },
-        target_mailbox: targetMailbox,
-        messages_scanned: processedMessages,
+        status: "DISCOVERY_COMPLETE", siphon_state: "connected", version: VERSION,
+        architecture: "CLIENT_CREDENTIALS_AUTONOMOUS",
+        scan_id: scanId, q1_window: { start: Q1_START, end: Q1_END },
+        target_mailbox: targetMailbox, messages_scanned: processedMessages,
         total_pdfs_found: discoveries.length,
-        raw_log: {
-          total_attachments_seen: totalAttachmentsSeen,
-          pdfs_accepted: pdfAccepted,
-          non_pdfs_rejected: nonPdfRejected,
-          consumer_domain_skipped: consumerDomainSkipped,
-        },
+        raw_log: { total_attachments_seen: totalAttachmentsSeen, pdfs_accepted: pdfAccepted, non_pdfs_rejected: nonPdfRejected, consumer_domain_skipped: consumerDomainSkipped },
         summary: {
           high_confidence: discoveries.filter((d) => d.confidence === "HIGH").length,
           medium_confidence: discoveries.filter((d) => d.confidence === "MEDIUM").length,
           low_confidence: discoveries.filter((d) => d.confidence === "LOW").length,
           already_siphoned: discoveries.filter((d) => d.is_already_siphoned).length,
         },
-        discoveries,
-        suppliers,
+        discoveries, suppliers,
         new_suppliers: newSuppliers.map((s) => ({
-          domain: s.domain,
-          sender_names: s.sender_names,
-          total_pdfs: s.total_pdfs,
-          cadence: s.cadence,
-          flag: "NEW_SUPPLIER_DETECTED",
-          action: "REQUESTING_ACCRUAL_MAPPING",
+          domain: s.domain, sender_names: s.sender_names, total_pdfs: s.total_pdfs,
+          cadence: s.cadence, flag: "NEW_SUPPLIER_DETECTED", action: "REQUESTING_ACCRUAL_MAPPING",
         })),
         scan_timestamp: new Date().toISOString(),
       }),
@@ -680,16 +594,33 @@ Deno.serve(async (req) => {
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[Discovery ${VERSION}] ❌ Scan failed: ${errMsg}`);
-
     return new Response(
-      JSON.stringify({
-        error: "DISCOVERY_FAILED",
-        message: errMsg,
-        siphon_state: "error",
-        version: VERSION,
-        scan_id: scanId,
-      }),
+      JSON.stringify({ error: "DISCOVERY_FAILED", message: errMsg, siphon_state: "error", version: VERSION, scan_id: scanId }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });
+
+// ═══════════════════════════════════════════════════════════════
+// AUTONOMOUS USER RESOLVER
+// Looks up the first microsoft_oauth_tokens record to determine
+// user_id + tenant_id without requiring Supabase auth.
+// ═══════════════════════════════════════════════════════════════
+async function resolveAutonomousUser(
+  supabase: ReturnType<typeof createClient>
+): Promise<{ userId: string; tenantId: string } | null> {
+  const { data, error } = await supabase
+    .from("microsoft_oauth_tokens")
+    .select("user_id, tenant_id")
+    .not("tenant_id", "is", null)
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data?.user_id || !data?.tenant_id) {
+    console.error(`[Discovery ${VERSION}] ❌ Autonomous resolver failed:`, error?.message || "No records");
+    return null;
+  }
+
+  console.log(`[Discovery ${VERSION}] 🤖 Autonomous resolver: user=${data.user_id.slice(0, 8)}... tenant=${data.tenant_id}`);
+  return { userId: data.user_id, tenantId: data.tenant_id };
+}
