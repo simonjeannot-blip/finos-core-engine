@@ -14,7 +14,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // PERMISSIONS REQUIRED: Mail.Read (Application), User.Read.All (Application)
 // ═══════════════════════════════════════════════════════════════
 
-const VERSION = "v4.2.0";
+const VERSION = "v4.3.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -404,6 +404,14 @@ Deno.serve(async (req) => {
     let nonPdfRejected = 0;
     let consumerDomainSkipped = 0;
 
+    // ═══════════════════════════════════════════════════════
+    // v4.3.0 INCREMENTAL SAVE — Each invoice saved immediately
+    // to prevent timeout data loss. No batch-at-end.
+    // ═══════════════════════════════════════════════════════
+    // Clear previous scan data upfront
+    await supabase.from("discovered_invoices").delete().eq("user_id", userId);
+    console.log(`[Discovery ${VERSION}] 🗑️ Cleared previous discoveries for incremental save`);
+
     for (const message of messages) {
       const senderAddress = message.from?.emailAddress?.address || "unknown@unknown";
       const senderName = message.from?.emailAddress?.name || senderAddress;
@@ -419,13 +427,11 @@ Deno.serve(async (req) => {
 
         if (!isPdf) {
           nonPdfRejected++;
-          console.log(`[Discovery ${VERSION}] 📎 REJECTED (non-PDF) | ${senderDomain} | "${att.name}" | type=${att.contentType} | size=${att.size}`);
           continue;
         }
 
         if (isConsumer) {
           consumerDomainSkipped++;
-          console.log(`[Discovery ${VERSION}] 🚫 SKIPPED (consumer domain) | ${senderDomain} | "${att.name}" | ${senderAddress}`);
           continue;
         }
 
@@ -441,6 +447,31 @@ Deno.serve(async (req) => {
 
         const isKnown = knownSupplierDomains.has(senderDomain) || knownVendorNames.has(senderName.toLowerCase());
 
+        const invoiceRow = {
+          user_id: userId,
+          scan_id: scanId,
+          message_id: message.id,
+          sender_name: senderName,
+          sender_address: senderAddress,
+          sender_domain: senderDomain,
+          subject: message.subject || "(No Subject)",
+          filename: att.name,
+          file_size: att.size,
+          received_at: message.receivedDateTime,
+          confidence: score,
+          confidence_reason: reason,
+          is_known_supplier: isKnown,
+          is_already_siphoned: existingDedupKeys.has(dedupKey),
+        };
+
+        // INCREMENTAL SAVE — persist immediately, survive timeouts
+        const { error: saveError } = await supabase.from("discovered_invoices").insert(invoiceRow);
+        if (saveError) {
+          console.error(`[Discovery ${VERSION}] ❌ Incremental save failed for "${att.name}":`, saveError.message);
+        } else {
+          console.log(`[Discovery ${VERSION}] 💾 SAVED | ${score} | ${senderDomain} | "${att.name}"`);
+        }
+
         discoveries.push({
           message_id: message.id,
           sender_name: senderName,
@@ -455,8 +486,6 @@ Deno.serve(async (req) => {
           is_known_supplier: isKnown,
           is_already_siphoned: existingDedupKeys.has(dedupKey),
         });
-
-        console.log(`[Discovery ${VERSION}] ✅ ACCEPTED | ${score} | ${senderDomain} | "${att.name}" | ${reason}`);
       }
     }
 
@@ -466,44 +495,7 @@ Deno.serve(async (req) => {
     console.log(`  PDFs accepted: ${pdfAccepted}`);
     console.log(`  Non-PDFs rejected: ${nonPdfRejected}`);
     console.log(`  Consumer domain skipped: ${consumerDomainSkipped}`);
-
-    // ═══════════════════════════════════════════════════════
-    // STEP 5.5: PERSIST to discovered_invoices
-    // ═══════════════════════════════════════════════════════
-    if (discoveries.length > 0) {
-      console.log(`[Discovery ${VERSION}] 💾 Persisting ${discoveries.length} discoveries...`);
-
-      await supabase.from("discovered_invoices").delete().eq("user_id", userId);
-
-      const batchSize = 50;
-      for (let i = 0; i < discoveries.length; i += batchSize) {
-        const batch = discoveries.slice(i, i + batchSize).map((d) => ({
-          user_id: userId,
-          scan_id: scanId,
-          message_id: d.message_id,
-          sender_name: d.sender_name,
-          sender_address: d.sender_address,
-          sender_domain: d.sender_domain,
-          subject: d.subject,
-          filename: d.filename,
-          file_size: d.file_size,
-          received_at: d.received_at,
-          confidence: d.confidence,
-          confidence_reason: d.confidence_reason,
-          is_known_supplier: d.is_known_supplier,
-          is_already_siphoned: d.is_already_siphoned,
-        }));
-
-        const { error: insertError } = await supabase.from("discovered_invoices").insert(batch);
-        if (insertError) {
-          console.error(`[Discovery ${VERSION}] ❌ Batch insert failed:`, insertError.message);
-        } else {
-          console.log(`[Discovery ${VERSION}] 💾 Batch ${Math.floor(i / batchSize) + 1} persisted (${batch.length} rows)`);
-        }
-      }
-    } else {
-      console.log(`[Discovery ${VERSION}] ⚠️ ZERO discoveries — nothing to persist`);
-    }
+    console.log(`[Discovery ${VERSION}] 💾 All ${discoveries.length} discoveries saved incrementally`);
 
     // ═══════════════════════════════════════════════════════
     // STEP 6: Supplier Intelligence Summary

@@ -17,6 +17,7 @@ import { StressTestChart } from "@/components/StressTestChart";
 import { OfflineModeIndicator } from "@/components/OfflineModeIndicator";
 import { ManualZReportForm, PendingReportsList } from "@/components/ManualZReportForm";
 import { BookingForm } from "@/components/BookingForm";
+import { GhostAuditTable } from "@/components/GhostAuditTable";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
 import { useAbsoluteTruth, LedgerCategory } from "@/hooks/useLedger";
@@ -230,6 +231,13 @@ export default function Index() {
         {isMobile && manualReports.length > 0 && (
           <section>
             <PendingReportsList reports={manualReports} />
+          </section>
+        )}
+
+        {/* Ghost Audit — Q1 Forensic Discovery */}
+        {isSuperAdmin && (
+          <section>
+            <GhostAuditTable />
           </section>
         )}
 
