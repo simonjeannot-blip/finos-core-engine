@@ -23,7 +23,7 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const IMMUTABLE_CLIENT_ID = "9878609b-2022-47dc-bfef-0611cf133dbc";
+const IMMUTABLE_CLIENT_ID = Deno.env.get("MICROSOFT_CLIENT_ID") || "dad54e9c-b85a-441d-98e0-589c9ece2c28";
 const GRAPH_API_BASE = "https://graph.microsoft.com/v1.0";
 
 const Q1_START = "2026-01-01T00:00:00Z";
@@ -154,13 +154,12 @@ async function fetchAllMessagesWithAttachments(
   accessToken: string,
   targetMailbox: string
 ): Promise<GraphMessage[]> {
-  const filter = `hasAttachments eq true and receivedDateTime ge ${Q1_START} and receivedDateTime le ${Q1_END}`;
+  const filter = `receivedDateTime ge ${Q1_START} and receivedDateTime le ${Q1_END}`;
   const select = "id,receivedDateTime,subject,from,hasAttachments";
-  const orderBy = "receivedDateTime desc";
 
   const allMessages: GraphMessage[] = [];
   let nextLink: string | null =
-    `${GRAPH_API_BASE}/users/${encodeURIComponent(targetMailbox)}/messages?$filter=${encodeURIComponent(filter)}&$select=${select}&$orderby=${encodeURIComponent(orderBy)}&$top=50`;
+    `${GRAPH_API_BASE}/users/${encodeURIComponent(targetMailbox)}/messages?$filter=${encodeURIComponent(filter)}&$select=${select}&$top=50`;
 
   let pageCount = 0;
   const MAX_PAGES = 20;

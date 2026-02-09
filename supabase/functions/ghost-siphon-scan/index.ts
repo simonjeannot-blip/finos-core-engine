@@ -23,7 +23,7 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const IMMUTABLE_CLIENT_ID = "9878609b-2022-47dc-bfef-0611cf133dbc";
+const IMMUTABLE_CLIENT_ID = Deno.env.get("MICROSOFT_CLIENT_ID") || "dad54e9c-b85a-441d-98e0-589c9ece2c28";
 const GRAPH_API_BASE = "https://graph.microsoft.com/v1.0";
 
 // ═══════════════════════════════════════════════════════════════

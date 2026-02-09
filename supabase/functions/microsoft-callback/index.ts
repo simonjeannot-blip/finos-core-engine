@@ -32,7 +32,7 @@ const VERSION = "v4.0.0";
 // ═══════════════════════════════════════════════════════════════
 // HARD-CODED CLIENT ID — Clean-room registration. v4.0.0 transplant.
 // ═══════════════════════════════════════════════════════════════
-const IMMUTABLE_CLIENT_ID = "9878609b-2022-47dc-bfef-0611cf133dbc";
+const IMMUTABLE_CLIENT_ID = Deno.env.get("MICROSOFT_CLIENT_ID") || "dad54e9c-b85a-441d-98e0-589c9ece2c28";
 
 // ═══════════════════════════════════════════════════════════════
 // IMMUTABLE REDIRECT URI — Hard-coded. No inference. No guesswork.
