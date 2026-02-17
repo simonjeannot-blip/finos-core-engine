@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createSovereignClient } from "../_shared/sovereign-client.ts";
 
 // ═══════════════════════════════════════════════════════════════
 // MODUS ARMS — SOVEREIGN INTAKE ENGINE v4.1
@@ -393,6 +394,35 @@ Deno.serve(async (req) => {
         }
 
         console.log(`✅ Ledger entry created: ${ledgerEntry.id}`);
+
+        // ═══════════════════════════════════════════════════════
+        // SOVEREIGN BRIDGE — Dual-write to external System of Record
+        // ═══════════════════════════════════════════════════════
+        try {
+          const sovereign = createSovereignClient();
+          await sovereign.from("financial_ledger").insert({
+            id: ledgerEntry.id,
+            user_id: adminProfile.id,
+            transaction_date: transactionDate,
+            vendor_name: vendorName,
+            category: "R",
+            net_amount: netAmount,
+            vat_amount: amountVat,
+            gross_amount: amountGross,
+            attribution_id: validatedAttributionId,
+            metadata: {
+              source: "universal-revenue-intake",
+              data_source: dataSource,
+              stream_id: streamId,
+              vat_status: vatStatus,
+              sovereign_sync: true,
+              synced_at: new Date().toISOString(),
+            },
+          });
+          console.log(`🔗 SOVEREIGN: Ledger entry synced to external DB`);
+        } catch (sovereignErr) {
+          console.error(`⚠️ SOVEREIGN SYNC FAILED (non-blocking):`, sovereignErr instanceof Error ? sovereignErr.message : sovereignErr);
+        }
 
         // Mark stream as PROCESSED
         await supabase
