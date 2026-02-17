@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createSovereignClient } from "../_shared/sovereign-client.ts";
 
 // ═══════════════════════════════════════════════════════════════
 // GHOST PROCESSOR — Extraction Layer v1.0
@@ -552,6 +553,27 @@ Deno.serve(async (req) => {
             .eq("user_id", userId);
 
           console.log(`[Processor] 💰 Accrual created: £${detectedAmount} → $A$ | ID: ${accrualId.slice(0, 8)}...`);
+
+          // ═══════════════════════════════════════════════════
+          // SOVEREIGN BRIDGE — Sync accrual to external DB
+          // ═══════════════════════════════════════════════════
+          try {
+            const sovereign = createSovereignClient();
+            await sovereign.from("committed_accruals").insert({
+              id: accrualId,
+              user_id: userId,
+              vendor_name: extraction.supplier_name || sender || "Unknown Supplier",
+              committed_amount: detectedAmount,
+              commitment_date: extraction.invoice_date || new Date().toISOString().split("T")[0],
+              due_date: extraction.due_date || null,
+              description: `Ghost-extracted: ${filename || "PDF"}`,
+              is_active: true,
+              metadata: { source: "GHOST_PROCESSOR", sovereign_sync: true, synced_at: new Date().toISOString() },
+            });
+            console.log(`[Processor] 🔗 SOVEREIGN: Accrual synced to external DB`);
+          } catch (sovErr) {
+            console.error(`[Processor] ⚠️ SOVEREIGN SYNC FAILED (non-blocking):`, sovErr instanceof Error ? sovErr.message : sovErr);
+          }
         }
       } else {
         accrualId = siphonedRecord.accrual_entry_id;

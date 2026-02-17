@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createSovereignClient } from "../_shared/sovereign-client.ts";
 
 // ═══════════════════════════════════════════════════════════════
 // MODUS ARMS — SOVEREIGN BOOKING INTAKE v1.0
@@ -368,6 +369,35 @@ Deno.serve(async (req) => {
       }
 
       console.log(`✅ Booking created: ${bookingEntry.id} (${bookingEntry.booking_id})`);
+
+      // ═══════════════════════════════════════════════════════
+      // SOVEREIGN BRIDGE — Dual-write to external System of Record
+      // ═══════════════════════════════════════════════════════
+      try {
+        const sovereign = createSovereignClient();
+        await sovereign.from("bookings").insert({
+          id: bookingEntry.id,
+          booking_id: normalized.booking_id,
+          user_id: adminProfile.id,
+          guest_name: normalized.guest_name,
+          guest_email: normalized.guest_email,
+          guest_phone: normalized.guest_phone,
+          party_size: normalized.party_size,
+          reservation_time: normalized.reservation_time,
+          source: normalizedSource,
+          status: normalized.status,
+          attribution_id: validatedAttributionId,
+          raw_stream_id: streamId,
+          metadata: {
+            ...normalized.metadata,
+            sovereign_sync: true,
+            synced_at: new Date().toISOString(),
+          },
+        });
+        console.log(`🔗 SOVEREIGN: Booking synced to external DB`);
+      } catch (sovereignErr) {
+        console.error(`⚠️ SOVEREIGN SYNC FAILED (non-blocking):`, sovereignErr instanceof Error ? sovereignErr.message : sovereignErr);
+      }
 
       // ═══════════════════════════════════════════════════════════
       // STEP 5: MARK STREAM AS PROCESSED
