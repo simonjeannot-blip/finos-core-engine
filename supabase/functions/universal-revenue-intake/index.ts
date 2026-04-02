@@ -363,10 +363,12 @@ Deno.serve(async (req) => {
         const vatStatus = amountVat === 0 ? "ZERO_OR_EXEMPT" : urlParams.tz ? "ZERO_OR_EXEMPT" : "STANDARD";
 
         // Commit to ledger
+        const HAGGERSTON_TENANT_ID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
         const { data: ledgerEntry, error: ledgerError } = await supabase
           .from("financial_ledger")
           .insert({
             user_id: adminProfile.id,
+            tenant_id: HAGGERSTON_TENANT_ID,
             transaction_date: transactionDate,
             vendor_name: vendorName,
             category: "R" as const,
@@ -662,8 +664,10 @@ Deno.serve(async (req) => {
 
         // 5. Create ledger entries
         console.log("📊 Creating ledger entries...");
+        const HAGGERSTON_TENANT_ID_B = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
         const ledgerEntries = sanitizedItems.map((item) => ({
           user_id: adminProfile.id,
+          tenant_id: HAGGERSTON_TENANT_ID_B,
           audit_id: auditLog.id,
           transaction_date: item.transaction_date,
           vendor_name: item.vendor_name,
