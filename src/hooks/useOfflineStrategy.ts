@@ -83,7 +83,7 @@ export function useOfflineStrategy(defaultStrategy: StrategyMode = "neutral"): U
         const [entries, totals, reports, ledgerMeta] = await Promise.all([
           getCachedLedgerEntries<LedgerEntry>(),
           getCachedTotals<AbsoluteTruthTotals>(),
-          getAllManualReports(),
+          getAllManualReports(HAGGERSTON_TENANT_ID),
           getCacheMetadata("ledger"),
         ]);
 
