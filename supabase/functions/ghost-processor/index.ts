@@ -520,10 +520,12 @@ Deno.serve(async (req) => {
     if (finalStatus === "processed" && detectedAmount > 0 && siphonedRecord) {
       // Check if accrual already exists for this invoice
       if (!siphonedRecord.accrual_entry_id) {
+        const HAGGERSTON_TENANT_ID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
         const { data: accrual, error: accrualError } = await supabase
           .from("committed_accruals")
           .insert({
             user_id: userId,
+            tenant_id: HAGGERSTON_TENANT_ID,
             vendor_name: extraction.supplier_name || sender || "Unknown Supplier",
             committed_amount: detectedAmount,
             commitment_date: extraction.invoice_date || new Date().toISOString().split("T")[0],

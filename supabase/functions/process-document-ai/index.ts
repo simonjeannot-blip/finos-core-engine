@@ -332,8 +332,10 @@ serve(async (req) => {
 
     // THE HANDSHAKE - Step 2: Create financial_ledger entries
     console.log("Creating ledger entries...");
+    const HAGGERSTON_TENANT_ID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
     const ledgerEntries = sanitizedItems.map((item) => ({
       user_id,
+      tenant_id: HAGGERSTON_TENANT_ID,
       audit_id: auditLog.id,
       transaction_date: item.transaction_date,
       vendor_name: item.vendor_name,
