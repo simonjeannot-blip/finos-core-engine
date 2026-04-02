@@ -29,6 +29,7 @@ interface ManualZReport {
   energyCosts: number;
   notes: string;
   synced: boolean;
+  tenant_id: string;
 }
 
 /**

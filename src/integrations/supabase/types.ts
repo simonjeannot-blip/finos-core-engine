@@ -119,6 +119,7 @@ export type Database = {
           reservation_time: string
           source: string
           status: string
+          tenant_id: string | null
           updated_at: string
           user_id: string
         }
@@ -136,6 +137,7 @@ export type Database = {
           reservation_time: string
           source?: string
           status?: string
+          tenant_id?: string | null
           updated_at?: string
           user_id: string
         }
@@ -153,10 +155,19 @@ export type Database = {
           reservation_time?: string
           source?: string
           status?: string
+          tenant_id?: string | null
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "bookings_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       committed_accruals: {
         Row: {
@@ -170,6 +181,7 @@ export type Database = {
           metadata: Json | null
           settled_at: string | null
           settled_ledger_id: string | null
+          tenant_id: string | null
           user_id: string
           vendor_name: string
         }
@@ -184,6 +196,7 @@ export type Database = {
           metadata?: Json | null
           settled_at?: string | null
           settled_ledger_id?: string | null
+          tenant_id?: string | null
           user_id: string
           vendor_name: string
         }
@@ -198,6 +211,7 @@ export type Database = {
           metadata?: Json | null
           settled_at?: string | null
           settled_ledger_id?: string | null
+          tenant_id?: string | null
           user_id?: string
           vendor_name?: string
         }
@@ -207,6 +221,20 @@ export type Database = {
             columns: ["settled_ledger_id"]
             isOneToOne: false
             referencedRelation: "financial_ledger"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "committed_accruals_settled_ledger_id_fkey"
+            columns: ["settled_ledger_id"]
+            isOneToOne: false
+            referencedRelation: "sales_ledger"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "committed_accruals_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
             referencedColumns: ["id"]
           },
         ]
@@ -279,6 +307,7 @@ export type Database = {
           metadata: Json | null
           net_amount: number
           pot_id: string | null
+          tenant_id: string | null
           transaction_date: string
           user_id: string
           vat_amount: number
@@ -294,6 +323,7 @@ export type Database = {
           metadata?: Json | null
           net_amount?: number
           pot_id?: string | null
+          tenant_id?: string | null
           transaction_date?: string
           user_id: string
           vat_amount?: number
@@ -309,6 +339,7 @@ export type Database = {
           metadata?: Json | null
           net_amount?: number
           pot_id?: string | null
+          tenant_id?: string | null
           transaction_date?: string
           user_id?: string
           vat_amount?: number
@@ -327,6 +358,13 @@ export type Database = {
             columns: ["audit_id"]
             isOneToOne: false
             referencedRelation: "ai_audit_log"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "financial_ledger_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
             referencedColumns: ["id"]
           },
         ]
@@ -472,6 +510,13 @@ export type Database = {
             referencedRelation: "financial_ledger"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "raw_data_stream_ledger_entry_id_fkey"
+            columns: ["ledger_entry_id"]
+            isOneToOne: false
+            referencedRelation: "sales_ledger"
+            referencedColumns: ["id"]
+          },
         ]
       }
       siphoned_invoices: {
@@ -535,6 +580,13 @@ export type Database = {
             referencedRelation: "financial_ledger"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "siphoned_invoices_ledger_entry_id_fkey"
+            columns: ["ledger_entry_id"]
+            isOneToOne: false
+            referencedRelation: "sales_ledger"
+            referencedColumns: ["id"]
+          },
         ]
       }
       system_audit_log: {
@@ -570,6 +622,33 @@ export type Database = {
         }
         Relationships: []
       }
+      tenants: {
+        Row: {
+          created_at: string
+          id: string
+          is_active: boolean
+          name: string
+          slug: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          name: string
+          slug: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          name?: string
+          slug?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       absolute_truth_calculator: {
@@ -580,10 +659,76 @@ export type Database = {
           p_total: number | null
           r_total: number | null
           s_value: number | null
+          tenant_id: string | null
           user_id: string | null
           v_total: number | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "financial_ledger_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales_ledger: {
+        Row: {
+          attribution_id: string | null
+          created_at: string | null
+          gross_amount: number | null
+          id: string | null
+          metadata: Json | null
+          net_amount: number | null
+          tenant_id: string | null
+          transaction_date: string | null
+          user_id: string | null
+          vat_amount: number | null
+          vendor_name: string | null
+        }
+        Insert: {
+          attribution_id?: string | null
+          created_at?: string | null
+          gross_amount?: number | null
+          id?: string | null
+          metadata?: Json | null
+          net_amount?: number | null
+          tenant_id?: string | null
+          transaction_date?: string | null
+          user_id?: string | null
+          vat_amount?: number | null
+          vendor_name?: string | null
+        }
+        Update: {
+          attribution_id?: string | null
+          created_at?: string | null
+          gross_amount?: number | null
+          id?: string | null
+          metadata?: Json | null
+          net_amount?: number | null
+          tenant_id?: string | null
+          transaction_date?: string | null
+          user_id?: string | null
+          vat_amount?: number | null
+          vendor_name?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "financial_ledger_attribution_id_fkey"
+            columns: ["attribution_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["attribution_id"]
+          },
+          {
+            foreignKeyName: "financial_ledger_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Functions: {

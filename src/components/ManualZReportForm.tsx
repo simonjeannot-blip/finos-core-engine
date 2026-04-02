@@ -71,6 +71,7 @@ export function ManualZReportForm({ onSuccess, isOffline = false }: ManualZRepor
         laborHours: parseFloat(data.laborHours) || 0,
         energyCosts: parseFloat(data.energyCosts) || 0,
         notes: data.notes,
+        tenant_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
       });
 
       toast({
