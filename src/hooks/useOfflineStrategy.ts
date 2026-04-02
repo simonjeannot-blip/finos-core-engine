@@ -6,7 +6,7 @@
  */
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { useAbsoluteTruth, AbsoluteTruthTotals, useLedger, LedgerEntry } from "./useLedger";
+import { useAbsoluteTruth, AbsoluteTruthTotals, useLedger, LedgerEntry, HAGGERSTON_TENANT_ID } from "./useLedger";
 import { useOnlineStatus } from "./useOnlineStatus";
 import {
   StrategyMode,

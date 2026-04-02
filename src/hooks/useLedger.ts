@@ -1,6 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 
+/**
+ * Haggerston Faraday Cage — Tenant Anchor
+ * All core financial queries are isolated to this tenant.
+ */
+export const HAGGERSTON_TENANT_ID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+
 export type LedgerCategory = "R" | "P" | "O" | "V" | "D" | "A";
 
 export interface LedgerEntry {
@@ -16,10 +22,12 @@ export interface LedgerEntry {
   metadata: Record<string, unknown>;
   audit_id: string | null;
   user_id: string;
+  tenant_id: string | null;
 }
 
 export interface AbsoluteTruthTotals {
   user_id: string;
+  tenant_id: string | null;
   r_total: number;
   p_total: number;
   o_total: number;
@@ -31,11 +39,12 @@ export interface AbsoluteTruthTotals {
 
 export function useLedger() {
   return useQuery({
-    queryKey: ["financial_ledger"],
+    queryKey: ["financial_ledger", HAGGERSTON_TENANT_ID],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("financial_ledger")
         .select("*")
+        .eq("tenant_id", HAGGERSTON_TENANT_ID)
         .order("transaction_date", { ascending: false });
 
       if (error) throw error;
@@ -46,14 +55,15 @@ export function useLedger() {
 
 export function useAbsoluteTruth() {
   return useQuery({
-    queryKey: ["absolute_truth_calculator"],
+    queryKey: ["absolute_truth_calculator", HAGGERSTON_TENANT_ID],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("absolute_truth_calculator")
         .select("*")
+        .eq("tenant_id", HAGGERSTON_TENANT_ID)
         .single();
 
-      if (error && error.code !== "PGRST116") throw error; // PGRST116 = no rows
+      if (error && error.code !== "PGRST116") throw error;
       return data as AbsoluteTruthTotals | null;
     },
   });
