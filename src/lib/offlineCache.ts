@@ -68,6 +68,7 @@ function openDatabase(): Promise<IDBDatabase> {
         const manualStore = db.createObjectStore(STORES.manualEntries, { keyPath: "id" });
         manualStore.createIndex("createdAt", "createdAt", { unique: false });
         manualStore.createIndex("synced", "synced", { unique: false });
+        manualStore.createIndex("tenant_id", "tenant_id", { unique: false });
       }
 
       // Cache metadata
@@ -254,18 +255,35 @@ export async function getUnsyncedManualReports(): Promise<ManualZReport[]> {
 }
 
 /**
- * Get all manual Z-Reports (for calculating S-Number)
+ * Get all manual Z-Reports for a specific tenant (for calculating S-Number)
  */
-export async function getAllManualReports(): Promise<ManualZReport[]> {
+export async function getAllManualReports(tenantId?: string): Promise<ManualZReport[]> {
   try {
     const db = await openDatabase();
     const tx = db.transaction(STORES.manualEntries, "readonly");
     const store = tx.objectStore(STORES.manualEntries);
 
     const reports = await new Promise<ManualZReport[]>((resolve, reject) => {
-      const request = store.getAll();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+      if (tenantId) {
+        // Use tenant_id index if available, fallback to getAll + filter
+        try {
+          const index = store.index("tenant_id");
+          const request = index.getAll(IDBKeyRange.only(tenantId));
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        } catch {
+          // Index may not exist on older DB versions — filter in JS
+          const request = store.getAll();
+          request.onsuccess = () => resolve(
+            (request.result as ManualZReport[]).filter(r => r.tenant_id === tenantId)
+          );
+          request.onerror = () => reject(request.error);
+        }
+      } else {
+        const request = store.getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      }
     });
 
     db.close();

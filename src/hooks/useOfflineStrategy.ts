@@ -83,7 +83,7 @@ export function useOfflineStrategy(defaultStrategy: StrategyMode = "neutral"): U
         const [entries, totals, reports, ledgerMeta] = await Promise.all([
           getCachedLedgerEntries<LedgerEntry>(),
           getCachedTotals<AbsoluteTruthTotals>(),
-          getAllManualReports(),
+          getAllManualReports(HAGGERSTON_TENANT_ID),
           getCacheMetadata("ledger"),
         ]);
 
@@ -139,7 +139,7 @@ export function useOfflineStrategy(defaultStrategy: StrategyMode = "neutral"): U
   // Reload manual reports periodically
   useEffect(() => {
     const loadManualReports = async () => {
-      const reports = await getAllManualReports();
+      const reports = await getAllManualReports(HAGGERSTON_TENANT_ID);
       setManualReports(reports);
     };
 
@@ -212,7 +212,7 @@ export function useOfflineStrategy(defaultStrategy: StrategyMode = "neutral"): U
     if (!isOffline) {
       await Promise.all([refetchEntries(), refetchTotals()]);
     }
-    const reports = await getAllManualReports();
+    const reports = await getAllManualReports(HAGGERSTON_TENANT_ID);
     setManualReports(reports);
   }, [checkNow, isOffline, refetchEntries, refetchTotals]);
 
