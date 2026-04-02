@@ -139,7 +139,7 @@ export function useOfflineStrategy(defaultStrategy: StrategyMode = "neutral"): U
   // Reload manual reports periodically
   useEffect(() => {
     const loadManualReports = async () => {
-      const reports = await getAllManualReports();
+      const reports = await getAllManualReports(HAGGERSTON_TENANT_ID);
       setManualReports(reports);
     };
 
