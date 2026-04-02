@@ -68,6 +68,7 @@ function openDatabase(): Promise<IDBDatabase> {
         const manualStore = db.createObjectStore(STORES.manualEntries, { keyPath: "id" });
         manualStore.createIndex("createdAt", "createdAt", { unique: false });
         manualStore.createIndex("synced", "synced", { unique: false });
+        manualStore.createIndex("tenant_id", "tenant_id", { unique: false });
       }
 
       // Cache metadata
