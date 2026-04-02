@@ -532,6 +532,7 @@ export type Database = {
           sender: string
           status: string
           subject: string
+          tenant_id: string | null
           updated_at: string
           user_id: string
         }
@@ -547,6 +548,7 @@ export type Database = {
           sender?: string
           status?: string
           subject?: string
+          tenant_id?: string | null
           updated_at?: string
           user_id: string
         }
@@ -562,6 +564,7 @@ export type Database = {
           sender?: string
           status?: string
           subject?: string
+          tenant_id?: string | null
           updated_at?: string
           user_id?: string
         }
