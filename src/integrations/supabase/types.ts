@@ -755,6 +755,7 @@ export type Database = {
           role: Database["public"]["Enums"]["user_role"]
         }[]
       }
+      get_user_tenant_id: { Args: { _user_id: string }; Returns: string }
       is_super_admin: { Args: { _user_id: string }; Returns: boolean }
     }
     Enums: {
