@@ -212,7 +212,7 @@ export function useOfflineStrategy(defaultStrategy: StrategyMode = "neutral"): U
     if (!isOffline) {
       await Promise.all([refetchEntries(), refetchTotals()]);
     }
-    const reports = await getAllManualReports();
+    const reports = await getAllManualReports(HAGGERSTON_TENANT_ID);
     setManualReports(reports);
   }, [checkNow, isOffline, refetchEntries, refetchTotals]);
 
