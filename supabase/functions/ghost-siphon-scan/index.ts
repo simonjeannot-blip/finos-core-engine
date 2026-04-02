@@ -285,10 +285,12 @@ Deno.serve(async (req) => {
         const senderAddress = message.from?.emailAddress?.address || "Unknown";
         const senderName = message.from?.emailAddress?.name || senderAddress;
 
+        const HAGGERSTON_TENANT_ID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
         const { error: insertError } = await supabase
           .from("siphoned_invoices")
           .insert({
             user_id: userId,
+            tenant_id: HAGGERSTON_TENANT_ID,
             sender: senderName,
             subject: message.subject || "(No Subject)",
             attachment_name: pdf.name,

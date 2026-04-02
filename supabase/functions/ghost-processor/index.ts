@@ -490,18 +490,20 @@ Deno.serve(async (req) => {
       siphonedRecord = data;
     } else {
       // Insert new record (from discovery — not yet in siphoned_invoices)
-      const { data, error: insertError } = await supabase
-        .from("siphoned_invoices")
-        .insert({
-          user_id: userId,
-          sender: extraction.supplier_name || sender || "Unknown",
-          subject: subject || "(No Subject)",
-          attachment_name: filename,
-          received_at: new Date().toISOString(),
-          status: finalStatus,
-          amount_detected: detectedAmount,
-          raw_json: rawJsonPayload,
-        })
+        const HAGGERSTON_TENANT_ID_SI = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+        const { data, error: insertError } = await supabase
+          .from("siphoned_invoices")
+          .insert({
+            user_id: userId,
+            tenant_id: HAGGERSTON_TENANT_ID_SI,
+            sender: extraction.supplier_name || sender || "Unknown",
+            subject: subject || "(No Subject)",
+            attachment_name: filename,
+            received_at: new Date().toISOString(),
+            status: finalStatus,
+            amount_detected: detectedAmount,
+            raw_json: rawJsonPayload,
+          })
         .select("id, accrual_entry_id")
         .maybeSingle();
 
